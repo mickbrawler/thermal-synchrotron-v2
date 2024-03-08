@@ -1,0 +1,43 @@
+SN	nickname	Type	D (Mpc)	nu_pk (GHz)	Fnu_pk (mJy)	t (days)	reference	comments
+1990B	90B	Ic	19.4	1.49	1.6	91	Chevalier98	
+1994I	94I	Ic	8.9	4.86	15.4	36	Chevalier98	
+1978K	78K	II	4.3	0.843	225	2400	Chevalier98	
+1979C	79C	II	17.1	4.88	8	450	Chevalier98	
+1980K	80K	II	6.3	4.88	2.3	160	Chevalier98	
+1986E	86E	II	19.4	4.86	0.3	266	Chevalier98	
+1986J	86J	II	11.1	5	140	1300	Chevalier98	
+1987A	87A	II	0.05	0.843	130	3.4	Chevalier98	
+1988Z	88Z	II	103	4.86	1.9	1500	Chevalier98	
+1993J	93J	II	3.6	4.86	110	150	Chevalier98	
+2001ig	01ig	Ibc	12.3	4.8	18	42	ChevalierFransson06	
+2002ap	02ap	Ic-BL	10.4	1.43	0.3	8	ChevalierFransson06	"Data in Berger et al. (2002), https://ui.adsabs.harvard.edu/abs/2002ApJ...577L...5B/abstract"
+2003L	03L	Ibc	96	4.9	2.4	170	ChevalierFransson06	
+2003bg	03bg	Ibc	19.5	8.46	40	60	ChevalierFransson06	
+AT2020mrf	20mrf	FBOT	637	7.44	0.35	261	Yao+21	
+2011dh	11dh	IIb	8.03	22.46	8	9	Horesh+13	
+AT2020xnd	20xnd	FBOT	1	20	79400	58	?	
+CSS161010	CSS161010	FBOT	150	4.4	12.2	99	Coppejans+20	
+AT2018cow	18cow	FBOT	60	100	101	22	?	
+AT2018lug	koala	FBOT	1	7.8	742000	64	?	
+1998bw	98bw	GRBSN	38	7	50	13	Kulkarni+98	
+1983N	83N	Ib	5.4	4.88	40.1	11.6	Weiler (2002)	"PEAK SEEMS TO BE GOVERNED BY FREE-FREE ABSORPTION! Determined from lightcurve. Data from Weiler et al. (1986), https://ui.adsabs.harvard.edu/abs/1986ApJ...301..790W/abstract"
+SN1984L	84L	Ib	21.7	5	4.59	11	Weiler (2002)	"PEAK SEEMS TO BE GOVERNED BY FREE-FREE ABSORPTION! Some data in Panagia et al. (1986), https://ui.adsabs.harvard.edu/abs/1986ApJ...300L..55P/abstract https://ui.adsabs.harvard.edu/abs/1986ApJ...300L..55P/abstract"
+SN1996N	96N	Ibc	15	4.86	0.464	39	Soderberg Thesis	
+SN1997x	97x	Ibc	16	4.86	2.08	12	Soderberg Thesis	
+SN2001em	01em	Ibc	81	4.86	1.815	868	Soderberg Thesis	
+SN2002cj	02cj	Ic	103	1.43	0.408	63	Soderberg Thesis	"Only one epoch with 3 frequency bands. Data in Berger et al. (2003), https://ui.adsabs.harvard.edu/abs/2003ApJ...599..408B/abstract"
+SN2002dg	02dg	Ib	197	4.86	0.092	53	Soderberg Thesis	
+SN2004c	04c	Ic	26	15	10.94	157	Soderberg Thesis	
+SN2004cc	04cc	Ic	16	8.46	4.596	27	Soderberg Thesis	
+SN2004dk	04dk	Ibc	28	8.46	2.419	14	Soderberg Thesis	
+SN2004gq	04gq	Ibc	23	8.46	6.404	31	Soderberg Thesis	
+SN2006dn	06dn	Ib	73	8.46	0.607	29	Soderberg Thesis	
+SN2006gi	06gi	Ib	48	8.46	0.626	30	Soderberg Thesis	
+SN2006jc	06jc	Ibc	23	8.46	0.3	80	Soderberg Thesis	
+SN2007c	07c	Ib	30	8.46	0.8	15	Soderberg Thesis	
+SN2007bg	07bg	Ic	147	22.5	1.329	23	Soderberg Thesis	
+SN2009bb	09bb	Ic-BL	40	6	19	20	Nayana's ASASSN16fp paper	
+SN2012ap	12ap	Ic-BL	40	8.9	5.7	18	Nayana's ASASSN16fp paper	"Original reference is Chakraborti et al. (2015), https://ui.adsabs.harvard.edu/abs/2015ApJ...805..187C/abstract"
+PTF14dby	PTF14dby	Ic-BL	337	24	0.2	10	Nayana's ASASSN16fp paper	
+J1644	J1644	TDE	1900	118	10.9	11.1	"from (my) SED fit at t_rest = 15 day (z=0.354), data from Berger et al. (2012), https://ui.adsabs.harvard.edu/abs/2012ApJ...748...36B/abstract"	
+AT2022cmc	2022cmc	TDE	8444	600	3	5.3	"from Andreoni et al (2022) fit at t_rest = 11.6d, https://ui.adsabs.harvard.edu/abs/2022Natur.612..430A/abstract"	
