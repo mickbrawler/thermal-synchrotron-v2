@@ -46,7 +46,7 @@ print('bG_sh = '+str(bG_sh))
 nu = np.logspace(6,14,1000)
 
 # calculate the specific luminosity at frequencies nu
-Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
+Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, include_syn_cooling=False, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
 
 # calculate post-shock gas velocity
 bG = 0.5*( bG_sh**2 - 2.0 + ( bG_sh**4 + 5.0*bG_sh**2 + 4.0 )**0.5 )**0.5
@@ -118,7 +118,7 @@ print('bG_sh = '+str(bG_sh))
 nu = np.logspace(6,14,1000)
 
 # calculate the specific luminosity at frequencies nu
-Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
+Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, include_syn_cooling=False, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
 
 # calculate post-shock gas velocity
 bG = 0.5*( bG_sh**2 - 2.0 + ( bG_sh**4 + 5.0*bG_sh**2 + 4.0 )**0.5 )**0.5
@@ -194,7 +194,7 @@ B = ( 8.0*np.pi*epsilon_B*4.0*Gamma*(Gamma-1.0)*n*mu*C.mp*C.c**2 )**0.5
 nu = np.logspace(6,14,1000)
 
 # calculate the specific luminosity at frequencies nu
-Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
+Lnu = thermalsyn.Lnu_of_nu(bG_sh,Mdot, nu, t, include_syn_cooling=False, epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,mu=mu,mu_e=mu_e)
 
 # calculate post-shock gas velocity
 bG = 0.5*( bG_sh**2 - 2.0 + ( bG_sh**4 + 5.0*bG_sh**2 + 4.0 )**0.5 )**0.5

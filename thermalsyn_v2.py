@@ -5,8 +5,7 @@ thermal and non-thermal (power-law) electrons following the model presented in
 Margalit & Quataert (2024; MQ24). The main function Lnu_of_nu() calculates the
 emergent synchrotron spectral luminosity as a function of the shock velocity
 and upstream (ambient) density (parameterized via an effective mass-loss rate),
-accounting for synchrotron self-absorption, and assuming that electrons are
-slow cooling.
+accounting for synchrotron self-absorption and synchrotron cooling.
 
 Please cite Margalit & Quataert (2024) and Margalit & Quataert (2021) if
 used for scientific purposes:
@@ -487,7 +486,7 @@ def alphanu_th(x,n,B,Theta,z_cool=np.inf):
     return val
 
 def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_derivative_calculation=True,
-                density_insteadof_massloss=False,radius_insteadof_time=False,pure_powerlaw_gamma_m=False,
+                density_insteadof_massloss=False,radius_insteadof_time=False,pure_powerlaw_gamma_m=False,include_syn_cooling=True,
                 epsilon_T=0.4,epsilon_B=0.1,epsilon_e=1e-2,p=3.0,f=0.1875,ell_dec=1.0,mu=0.62,mu_e=1.18):
     '''Synchrotron specific luminosity as a function of shock parameters
 
@@ -518,7 +517,6 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
     direct_derivative_calculation : boolean, optional
         Flag that determines the method by which the derivative function is
         calculated (assuming 'return_derivative'=True). Default is True.
-
     density_insteadof_massloss : boolean, optional (default is False)
         Flag that allows user to specify the ambient (upstream) number density
         instead of the effective mass-loss rate. If set to True, then the input
@@ -533,7 +531,12 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
         that has typically neglected thermal electrons. Otherwise, gamma_m is
         calculated using the Margalit & Quataert (2021) formalism. This flag is
         included primarily as a means for comparison with previous work.
-
+    include_syn_cooling : boolean, optional (default is True)
+        Flag that, if set to True, will cause synchrotron cooling effects to be
+        included in the calculation. Otherwise, synchrotron cooling will be
+        neglected. Note that corrections to the SED due to fast-cooling
+        electrons are only treated in an approximate way in this implementation,
+        roughly following the formalism in Margalit & Quataert (2021).
     epsilon_T : float, optional
         Electron thermalization efficiency, default is 0.4
     epsilon_B : float, optional
@@ -578,6 +581,8 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
         n = Mdot_over_vw
         # convert from number density to mass-loss rate (eq. 4)
         Mdot_over_vw = 4.0*np.pi*mu*C.mp*R**2*n
+    else:
+        n = Mdot_over_vw/(4.0*np.pi*mu*C.mp*R**2)
 
     # calculate beta*Gamma from (beta*Gamma)_sh
     bG = 0.5*( bG_sh**2 - 2.0 + ( bG_sh**4 + 5.0*bG_sh**2 + 4.0 )**0.5 )**0.5
@@ -615,7 +620,7 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
         gamma_m = gamma_m_pl_only(Gamma_minus_one,epsilon_e=epsilon_e,p=p,zeta_e=1e0,mu=mu,mu_e=mu_e)
     else:
         # otherwise, use the Margalit & Quataert (2021) formalism
-        gamma_m = gamma_m_fun(Theta) # note: setting gamma_m=np.nan or simply omitting it as an argument in the functions below will produce the same result
+        gamma_m = gamma_m_fun(Theta)
 
     # the relative fraction of power-law to thermal electron energy densities
     delta = epsilon_e/epsilon_T
@@ -630,20 +635,38 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
     b_corr = low_freq_apl_correction(x,Theta,p,derivative=False,gamma_m=gamma_m)
     dbdx_corr = low_freq_apl_correction(x,Theta,p,derivative=True,gamma_m=gamma_m)
 
+    # if include_syn_cooling flag is set to True, include synchrotron cooling corrections
+    if include_syn_cooling:
+        # downstream magnetic field
+        B = ( 8.0*np.pi*epsilon_B*4.0*Gamma*Gamma_minus_one*n*mu*C.mp*C.c**2 )**0.5
+        # an estimate of the Lorentz factor above which electrons cool quickly
+        gamma_cool = 6.0*np.pi*C.me*C.c/(C.sigT*B**2*Gamma*t)
+        # the Lorentz factor of thermal electrons contributing most to emission at frequency x
+        gamma_th = Theta*np.maximum( 1.0, (2.0*x)**(1.0/3.0) )
+        # the Lorentz factor of power-law electrons contributing most to emission at frequency x
+        gamma_pl = np.maximum( gamma_m, Theta*x**0.5 )
+        # correction terms for fast-cooling regime
+        cooling_correction_th = np.minimum( 1e0, gamma_cool/gamma_th )
+        cooling_correction_pl = np.minimum( 1e0, gamma_cool/gamma_pl )
+    else:
+        # if include_syn_cooling=False then neglect the fast-cooling regime (correction terms = 1 in this case)
+        cooling_correction_th = 1e0
+        cooling_correction_pl = 1e0
+
     # in the following we absorb f(Theta) into the definition of I`(x) for numerical reasons
     I = I_of_x(x)*f_fun(Theta)
     # if the value is non-physical replace with 0 (this only occurs when power-law >> thermal emission, so I`(x) can be neglected)
     I[np.isnan(I)+np.isinf(I)] = 0.0
 
     # calculate the optical depth (eq. B11)
-    tau = tau_Theta*( (I/x) + b*x**(-0.5*(p+4.0))*b_corr )
+    tau = tau_Theta*( (I/x)*cooling_correction_th + b*x**(-0.5*(p+4.0))*b_corr*cooling_correction_pl )
 
     # useful function of the optical depth
     tau_fun = np.ones_like(tau)
     tau_fun[tau>1e-9] = ( 1.0 - np.exp(-tau[tau>1e-9]) )/tau[tau>1e-9]
 
     # calculate the specific luminosity (eq. B10)
-    Lnu = L_tilde*( x*I + a*x**(-0.5*(p-1.0))*a_corr )*tau_fun
+    Lnu = L_tilde*( x*I*cooling_correction_th + a*x**(-0.5*(p-1.0))*a_corr*cooling_correction_pl )*tau_fun
 
     # a function that attains the value zero when dLnu/dnu = 0 (ala eq. B15)
     if return_derivative:
@@ -671,8 +694,8 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
         val = Lnu
     return val
 
-def Fnu_of_nu( bG_sh, Mdot_over_vw, nu, t, Dlum=1e26, z=0.0,
-                density_insteadof_massloss=False,radius_insteadof_time=False,pure_powerlaw_gamma_m=False,
+def Fnu_of_nu( bG_sh, Mdot_over_vw, nu, t, Dlum=1e26, z=0.0, density_insteadof_massloss=False,
+                radius_insteadof_time=False,pure_powerlaw_gamma_m=False,include_syn_cooling=True,
                 epsilon_T=0.4,epsilon_B=0.1,epsilon_e=1e-2,p=3.0,f=0.1875,ell_dec=1.0,mu=0.62,mu_e=1.18):
     '''Flux density as a function of shock parameters
 
@@ -714,6 +737,12 @@ def Fnu_of_nu( bG_sh, Mdot_over_vw, nu, t, Dlum=1e26, z=0.0,
         that has typically neglected thermal electrons. Otherwise, gamma_m is
         calculated using the Margalit & Quataert (2021) formalism. This flag is
         included primarily as a means for comparison with previous work.
+    include_syn_cooling : boolean, optional (default is True)
+        Flag that, if set to True, will cause synchrotron cooling effects to be
+        included in the calculation. Otherwise, synchrotron cooling will be
+        neglected. Note that corrections to the SED due to fast-cooling
+        electrons are only treated in an approximate way in this implementation,
+        roughly following the formalism in Margalit & Quataert (2021).
     epsilon_T : float, optional
         Electron thermalization efficiency, default is 0.4
     epsilon_B : float, optional
@@ -740,10 +769,10 @@ def Fnu_of_nu( bG_sh, Mdot_over_vw, nu, t, Dlum=1e26, z=0.0,
     # correct observer time and frequency for cosmological redshift
     t *= (1.0+z)
     nu *= 1.0/(1.0+z)
-    
+
     # calculate (isotropic-equivalent) specific luminosity
     Lnu = Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, density_insteadof_massloss=density_insteadof_massloss,
-                    radius_insteadof_time=radius_insteadof_time, pure_powerlaw_gamma_m=pure_powerlaw_gamma_m,
+                    radius_insteadof_time=radius_insteadof_time, pure_powerlaw_gamma_m=pure_powerlaw_gamma_m,include_syn_cooling=include_syn_cooling,
                     epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,ell_dec=ell_dec,mu=mu,mu_e=mu_e)
 
     # calculate the observed flux density
@@ -923,7 +952,7 @@ def solve_shock_analytic(Lnu_pk,nu_pk,t, regime='thick',limit='none', epsilon_T=
     val = bG_sh, Mdot, R, n, B, U
     return val
 
-def wrapper_for_solve_shock(args, bG_sh0,Mdot_over_v0, Lnu_pk,nu_pk,t, epsilon_T,epsilon_B,epsilon_e,p,f,ell_dec,mu,mu_e,direct_derivative_calculation):
+def wrapper_for_solve_shock(args, bG_sh0,Mdot_over_v0, Lnu_pk,nu_pk,t, epsilon_T,epsilon_B,epsilon_e,p,f,ell_dec,mu,mu_e,direct_derivative_calculation,include_syn_cooling):
     '''A utility function that is called in solve_shock(), defined below.'''
 
     # unpack x and y parameters
@@ -935,7 +964,7 @@ def wrapper_for_solve_shock(args, bG_sh0,Mdot_over_v0, Lnu_pk,nu_pk,t, epsilon_T
     y = np.sign(y)*(y**4/(y**4+2.0))**0.25
 
     # calculate Lnu(nu_pk,t) and the derivative function for values of x and y
-    Lnu, derivative_function = Lnu_of_nu( 10**x*bG_sh0, 10**y*Mdot_over_v0, nu_pk, t, return_derivative=True,direct_derivative_calculation=direct_derivative_calculation,epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,ell_dec=ell_dec,mu=mu,mu_e=mu_e)
+    Lnu, derivative_function = Lnu_of_nu( 10**x*bG_sh0, 10**y*Mdot_over_v0, nu_pk, t, return_derivative=True,direct_derivative_calculation=direct_derivative_calculation,include_syn_cooling=include_syn_cooling,epsilon_T=epsilon_T,epsilon_B=epsilon_B,epsilon_e=epsilon_e,p=p,f=f,ell_dec=ell_dec,mu=mu,mu_e=mu_e)
 
     # create the two outputs which must be (simultanesouly) set to zero
     val = np.array([np.nan,np.nan])
@@ -945,7 +974,9 @@ def wrapper_for_solve_shock(args, bG_sh0,Mdot_over_v0, Lnu_pk,nu_pk,t, epsilon_T
     val *= limiter
     return val
 
-def solve_shock(Lnu_pk,nu_pk,t, regime='thick',initial_guess=[np.nan,np.nan],direct_derivative_calculation=np.nan,epsilon_T=0.4,epsilon_B=0.1,epsilon_e=1e-2,p=3.0,f=0.1875,ell_dec=1.0,mu=0.62,mu_e=1.18):
+def solve_shock(Lnu_pk,nu_pk,t, regime='thick',initial_guess=[np.nan,np.nan],
+                direct_derivative_calculation=np.nan,include_syn_cooling=False,
+                epsilon_T=0.4,epsilon_B=0.1,epsilon_e=1e-2,p=3.0,f=0.1875,ell_dec=1.0,mu=0.62,mu_e=1.18):
     '''Numerically solve for shock properties
 
     This function numerically solves for the physical vaeiables of the shock,
@@ -972,6 +1003,12 @@ def solve_shock(Lnu_pk,nu_pk,t, regime='thick',initial_guess=[np.nan,np.nan],dir
     direct_derivative_calculation : boolean, optional
         Flag that determines the method by which the derivative function is
         calculated. Default is nan, in which case a hybrid method is used.
+    include_syn_cooling : boolean, optional (default is False)
+        Flag that, if set to True, will cause synchrotron cooling effects to be
+        included in the calculation. Otherwise, synchrotron cooling will be
+        neglected. Note that corrections to the SED due to fast-cooling
+        electrons are only treated in an approximate way in this implementation,
+        roughly following the formalism in Margalit & Quataert (2021).
     epsilon_T : float, optional
         Electron thermalization efficiency, default is 0.4
     epsilon_B : float, optional
@@ -1042,7 +1079,7 @@ def solve_shock(Lnu_pk,nu_pk,t, regime='thick',initial_guess=[np.nan,np.nan],dir
 
     for i in range(np.size(bG_sh0)):
         # numerically solve for the the proper-velocity of the shock and effective mass-loss parameter
-        sol = optimize.root( wrapper_for_solve_shock, x0, method='broyden1', args=(bG_sh0[i],Mdot0[i],Lnu_pk,nu_pk,t,epsilon_T,epsilon_B,epsilon_e,p,f,ell_dec,mu,mu_e,direct_derivative_calculation) )
+        sol = optimize.root( wrapper_for_solve_shock, x0, method='broyden1', args=(bG_sh0[i],Mdot0[i],Lnu_pk,nu_pk,t,epsilon_T,epsilon_B,epsilon_e,p,f,ell_dec,mu,mu_e,direct_derivative_calculation,include_syn_cooling) )
 
         # set values if found solution (otherwise values = nan)
         if sol['success']:
