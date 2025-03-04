@@ -42,7 +42,7 @@ This file can be imported as a module and contains the following functions:
 import numpy as np
 from scipy import special
 from scipy import optimize
-import Constants as C
+from thermal_synchrotron_v2 import Constants as C
 
 def a_fun(Theta):
     '''Utility function defined in eq. (1), MQ21

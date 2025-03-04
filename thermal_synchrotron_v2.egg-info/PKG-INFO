@@ -1,7 +1,7 @@
 Metadata-Version: 2.1
 Name: thermal_synchrotron_v2
 Version: 0.0.0
-Home-page: https://github.com/bmargalit/thermal-synchrotron-v2
+Home-page: https://github.com/mickbrawler/thermal-synchrotron-v2
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: scipy
