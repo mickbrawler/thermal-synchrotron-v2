@@ -2,11 +2,10 @@
 
 This module calculates synchrotron emission from a combined distribution of
 thermal and non-thermal (power-law) electrons following the model presented in
-Margalit & Quataert (2024; MQ24). Some edits have been made to maintain consistency
-with the formalism of Ferguson and Margalit (2025). The main function Lnu_of_nu() 
-calculates the emergent synchrotron spectral luminosity as a function of the shock
-velocity and upstream (ambient) density (parameterized via an effective mass-loss 
-rate), accounting for synchrotron self-absorption and synchrotron cooling.
+Margalit & Quataert (2024; MQ24). The main function Lnu_of_nu() calculates the
+emergent synchrotron spectral luminosity as a function of the shock velocity
+and upstream (ambient) density (parameterized via an effective mass-loss rate),
+accounting for synchrotron self-absorption and synchrotron cooling.
 
 Please cite Margalit & Quataert (2024) and Margalit & Quataert (2021) if
 used for scientific purposes:
@@ -43,7 +42,7 @@ This file can be imported as a module and contains the following functions:
 import numpy as np
 from scipy import special
 from scipy import optimize
-import Constants as C
+from thermal_synchrotron_v2 import Constants as C
 
 def a_fun(Theta):
     '''Utility function defined in eq. (1), MQ21
@@ -185,7 +184,7 @@ def g_fun(Theta,p=3.0,gamma_m=np.nan):
     if np.any(np.isnan(gamma_m)):
         gamma_m = gamma_m_fun(Theta)
 
-
+    #val = ( (p-1.0)*(1e0+a_fun(Theta)*Theta)/( (p-1.0)*gamma_m - p+2.0 ) )*(gamma_m/(3.0*Theta))**(p-1.0) # Version quoted in Margalit & Quataert (2021)
     val = ( (p-1.0)*a_fun(Theta)*Theta/( (p-1.0)*gamma_m - p+2.0 ) )*(gamma_m/(3.0*Theta))**(p-1.0) # correction of typo
     return val
 
@@ -254,114 +253,8 @@ def C_alpha(p):
 
     return ( special.gamma((p+6.0)/4.0)/special.gamma((p+8.0)/4.0) )*special.gamma((3.0*p+2.0)/12.0)*special.gamma((3.0*p+22.0)/12.0)*(p-2.0)*3.0**((2.0*p-5.0)/2.0)*2.0**(p/2.0)*np.pi**(3.0/2.0)
 
-def low_freq_jpl_correction_FM25(x,Theta,p,epsilon_e,u,n,derivative=False,GRB_convention=False,gamma_m=np.nan):
-    '''Low-frequency correction to power-law emissivity (FM25 formalism)
-
-    This function returns a multiplicative frequency-dependent correction term
-    that modifies the high-frequency power-law emissivity in the regime
-    nu <~ nu_m (where nu_m is the synchrotron frequency corresponding to the
-    minimum Lorentz factor of power-law electrons, gamma_m). We adopt an
-    approximate expression that smoothly interpolates between the exact high-
-    and low-frequency results.
-
-    Parameters
-    __________
-    x : float
-        Dimensionless frequency = nu/nu_Theta (see eq. 11, MQ21)
-    Theta : float
-        Dimensionless electron temperature
-    p : float
-        Slope of power-law electron distribution
-    derivative : boolean
-        If True---returns the derivative of the correction term wrt x,
-        default is False
-    gamma_m : float, optional
-        The minimum Lorentz factor of power-law electrons. Default is nan, in
-        which case gamma_m is calculated from the function gamma_m_fun(Theta)
-        in line with the MQ21 formalism.
-
-    Returns
-    _______
-    val : float
-        Correction term
-    '''
-
-    # if gamma_m not explicitly specified, use the convention of MQ21
-    if np.any(np.isnan(gamma_m)):
-        gamma_m = gamma_m_fun(Theta)
-        
-    if GRB_convention==True:
-        zeta_e = 1
-        mu, mu_e = 1,1
-        gamma_m = (epsilon_e/zeta_e)*((p-2.0)/(p-1.0))*u/(n*C.me*C.c*C.c)
-
-    # synchrotron constant in x<<x_m limit
-    Cj_low = -np.pi**1.5*(p-2.0)/( 2.0**(1.0/3.0)*3.0**(1.0/6.0)*(3.0*p-1.0)*special.gamma(1.0/3.0)*special.gamma(-1.0/3.0)*special.gamma(11.0/6.0) )
-    # multiplicative correction term
-    corr = (Cj_low/C_j(p))*(gamma_m/(3.0*Theta))**(-(3.0*p-1.0)/3.0)*x**((3.0*p-1.0)/6.0)
-    # approximate interpolation with a "smoothing parameter" = s
-    s = 3.0/p
-    if derivative:
-        val = ( 1e0 + corr**(-s) )**(-(s+1.0)/s)*((3.0*p-1.0)/6.0)*corr**(-s)/x
-    else:
-        val = ( 1e0 + corr**(-s) )**(-1.0/s)
-    return val
-
-def low_freq_apl_correction_FM25(x,Theta,p,epsilon_e,u,n,derivative=False,GRB_convention=False,gamma_m=np.nan):
-    '''Low-frequency correction to power-law absorption coefficient (FM25 formalism)
-
-    This function returns a multiplicative frequency-dependent correction term
-    that modifies the high-frequency power-law absorption coeff in the regime
-    nu <~ nu_m (where nu_m is the synchrotron frequency corresponding to the
-    minimum Lorentz factor of power-law electrons, gamma_m). We adopt an
-    approximate expression that smoothly interpolates between the exact high-
-    and low-frequency results.
-
-    Parameters
-    __________
-    x : float
-        Dimensionless frequency = nu/nu_Theta (see eq. 11, MQ21)
-    Theta : float
-        Dimensionless electron temperature
-    p : float
-        Slope of power-law electron distribution
-    derivative : boolean
-        If True---returns the derivative of the correction term wrt x,
-        default is False
-    gamma_m : float, optional
-        The minimum Lorentz factor of power-law electrons. Default is nan, in
-        which case gamma_m is calculated from the function gamma_m_fun(Theta)
-        in line with the MQ21 formalism.
-
-    Returns
-    _______
-    val : float
-        Correction term
-    '''
-
-    # if gamma_m not explicitly specified, use the convention of MQ21
-    if np.any(np.isnan(gamma_m)):
-        gamma_m = gamma_m_fun(Theta)
-        
-    if GRB_convention==True:
-        zeta_e = 1
-        mu, mu_e = 1,1
-        gamma_m = (epsilon_e/zeta_e)*((p-2.0)/(p-1.0))*u/(n*C.me*C.c*C.c)
-        
-    # synchrotron constant in x<<x_m limit
-    Calpha_low = -2.0**(8.0/3.0)*np.pi**(7.0/2.0)*(p+2.0)*(p-2.0)/( 3.0**(19.0/6.0)*(3.0*p+2)*special.gamma(1.0/3.0)*special.gamma(-1.0/3.0)*special.gamma(11.0/6.0) )
-    # multiplicative correction term
-    corr = (Calpha_low/C_alpha(p))*(gamma_m/(3.0*Theta))**(-(3.0*p+2.0)/3.0)*x**((3.0*p+2.0)/6.0)
-    # approximate interpolation with a "smoothing parameter" = s
-    s = 3.0/p
-    if derivative:
-        val = ( 1e0 + corr**(-s) )**(-(s+1.0)/s)*((3.0*p+2.0)/6.0)*corr**(-s)/x
-    else:
-        val = ( 1e0 + corr**(-s) )**(-1.0/s)
-    return val
-
-def low_freq_jpl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=np.nan):
-    '''Low-frequency correction to power-law emissivity (MQ24 formalism). Used in effective LOS approximation
+def low_freq_jpl_correction(x,Theta,p,derivative=False,gamma_m=np.nan):
+    '''Low-frequency correction to power-law emissivity
 
     This function returns a multiplicative frequency-dependent correction term
     that modifies the high-frequency power-law emissivity in the regime
@@ -408,7 +301,7 @@ def low_freq_jpl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=np.nan):
         val = ( 1e0 + corr**(-s) )**(-1.0/s)
     return val
 
-def low_freq_apl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=np.nan):
+def low_freq_apl_correction(x,Theta,p,derivative=False,gamma_m=np.nan):
     '''Low-frequency correction to power-law absorption coefficient
 
     This function returns a multiplicative frequency-dependent correction term
@@ -443,7 +336,7 @@ def low_freq_apl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=np.nan):
     # if gamma_m not explicitly specified, use the convention of MQ21
     if np.any(np.isnan(gamma_m)):
         gamma_m = gamma_m_fun(Theta)
-        
+
     # synchrotron constant in x<<x_m limit
     Calpha_low = -2.0**(8.0/3.0)*np.pi**(7.0/2.0)*(p+2.0)*(p-2.0)/( 3.0**(19.0/6.0)*(3.0*p+2)*special.gamma(1.0/3.0)*special.gamma(-1.0/3.0)*special.gamma(11.0/6.0) )
     # multiplicative correction term
@@ -456,7 +349,7 @@ def low_freq_apl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=np.nan):
         val = ( 1e0 + corr**(-s) )**(-1.0/s)
     return val
 
-def jnu_pl(x,n,u,B,Theta,epsilon_e,delta=1e-1,p=3.0,GRB_convention=False,z_cool=np.inf,gamma_m=np.nan):
+def jnu_pl(x,n,B,Theta,delta=1e-1,p=3.0,z_cool=np.inf,gamma_m=np.nan):
     '''Synchrotron emissivity of power-law electrons (eqs. 14,19; MQ21)
 
     Parameters
@@ -486,19 +379,16 @@ def jnu_pl(x,n,u,B,Theta,epsilon_e,delta=1e-1,p=3.0,GRB_convention=False,z_cool=
     val : float
         Synchrotron emissivity
     '''
-    if GRB_convention==True:
-        zeta_e = 1
-        mu, mu_e = 1,1
-        gamma_m = (epsilon_e/zeta_e)*((p-2.0)/(p-1.0))*u/(n*C.me*C.c*C.c)
+
     val = C_j(p)*(C.q**3/(C.me*C.c**2))*delta*n*B*g_fun(Theta,p=p,gamma_m=gamma_m)*x**(-(p-1.0)/2.0)
     # correct emission at low-frequencies x < x_m:
-    val *= low_freq_jpl_correction_FM25(x,Theta,p,epsilon_e,u,n,gamma_m=gamma_m,GRB_convention=GRB_convention)
+    val *= low_freq_jpl_correction(x,Theta,p,gamma_m=gamma_m)
     # fast-cooling correction:
     z0 = x**0.5
-    val *= np.minimum( 1e0, z_cool/z0 )
+    val *= np.maximum( 1e0, z0/z_cool )**(-1)
     return val
 
-def alphanu_pl(x,n,u,B,Theta,epsilon_e,delta=1e-1,p=3.0,GRB_convention=False,z_cool=np.inf,gamma_m=np.nan):
+def alphanu_pl(x,n,B,Theta,delta=1e-1,p=3.0,z_cool=np.inf,gamma_m=np.nan):
     '''Synchrotron absorption coeff of power-law electrons (eqs. 16,19; MQ21)
 
     Parameters
@@ -528,17 +418,13 @@ def alphanu_pl(x,n,u,B,Theta,epsilon_e,delta=1e-1,p=3.0,GRB_convention=False,z_c
     val : float
         Synchrotron absorption coefficient
     '''
-    if GRB_convention==True:
-        zeta_e = 1
-        mu, mu_e = 1,1
-        gamma_m = (epsilon_e/zeta_e)*((p-2.0)/(p-1.0))*u/(n*C.me*C.c*C.c)
-    
+
     val = C_alpha(p)*C.q*(delta*n/(Theta**5*B))*g_fun(Theta,p=p,gamma_m=gamma_m)*x**(-(p+4.0)/2.0)
     # correct emission at low-frequencies x < x_m:
-    val *= low_freq_apl_correction_FM25(x,Theta,p,epsilon_e,u,n,gamma_m=gamma_m,GRB_convention=GRB_convention)
+    val *= low_freq_apl_correction(x,Theta,p,gamma_m=gamma_m)
     # fast-cooling correction:
     z0 = x**0.5
-    val *= np.minimum( 1e0, z_cool/z0 )
+    val *= np.maximum( 1e0, z0/z_cool )**(-1)
     return val
 
 def jnu_th(x,n,B,Theta,z_cool=np.inf):
@@ -563,13 +449,13 @@ def jnu_th(x,n,B,Theta,z_cool=np.inf):
     val : float
         Synchrotron emissivity
     '''
+
     val = (3.0**0.5/(8.0*np.pi))*(C.q**3/(C.me*C.c**2))*f_fun(Theta)*n*B*x*I_of_x(x)
     # fast-cooling correction:
     z0 = (2.0*x)**(1.0/3.0)
-    val *= np.minimum( 1e0, z_cool/z0 )
+    val *= np.maximum( 1e0, z0/z_cool )**(-1)
     return val
 
-    
 def alphanu_th(x,n,B,Theta,z_cool=np.inf):
     '''Synchrotron absorption coeff of thermal electrons (eqs. 12,20; MQ21)
 
@@ -596,7 +482,7 @@ def alphanu_th(x,n,B,Theta,z_cool=np.inf):
     val = (np.pi*3.0**(-3.0/2.0))*C.q*(n/(Theta**5*B))*f_fun(Theta)*x**(-1.0)*I_of_x(x)
     # fast-cooling correction:
     z0 = (2.0*x)**(1.0/3.0)
-    val *= np.minimum( 1e0, z_cool/z0 )
+    val *= np.maximum( 1e0, z0/z_cool )**(-1)
     return val
 
 def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_derivative_calculation=True,
@@ -744,10 +630,10 @@ def Lnu_of_nu( bG_sh, Mdot_over_vw, nu, t, return_derivative=False,direct_deriva
     b = (3.0**1.5/np.pi)*C_alpha(p)*delta*g_fun(Theta,p=p,gamma_m=gamma_m)
 
     # include low-frequeny corrections to the coefficients `a` and `b` defied above (see e.g. low_freq_jpl_correction function for more information)
-    a_corr = low_freq_jpl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=gamma_m)
-    dadx_corr = low_freq_jpl_correction_MQ24(x,Theta,p,derivative=True,gamma_m=gamma_m)
-    b_corr = low_freq_apl_correction_MQ24(x,Theta,p,derivative=False,gamma_m=gamma_m)
-    dbdx_corr = low_freq_apl_correction_MQ24(x,Theta,p,derivative=True,gamma_m=gamma_m)
+    a_corr = low_freq_jpl_correction(x,Theta,p,derivative=False,gamma_m=gamma_m)
+    dadx_corr = low_freq_jpl_correction(x,Theta,p,derivative=True,gamma_m=gamma_m)
+    b_corr = low_freq_apl_correction(x,Theta,p,derivative=False,gamma_m=gamma_m)
+    dbdx_corr = low_freq_apl_correction(x,Theta,p,derivative=True,gamma_m=gamma_m)
 
     # if include_syn_cooling flag is set to True, include synchrotron cooling corrections
     if include_syn_cooling:
