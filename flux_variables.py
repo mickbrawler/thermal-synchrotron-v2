@@ -1755,18 +1755,19 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==False:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-
-        if therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        else:
+        if therm_el==True and pl_el==True:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        elif therm_el==True and pl_el==False:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+        elif therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        else:
+            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma**2
@@ -1894,18 +1895,19 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==False:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-
-        if therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        else:
+        if therm_el==True and pl_el==True:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        elif therm_el==True and pl_el==False:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+        elif therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        else:
+            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma_f**2
