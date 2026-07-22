@@ -118,17 +118,33 @@ FIXED_PARAMS = dict(
     eps_B  = 0.1,     # fraction of energy in B-field -- FIXED. try 0.01 too
 )
 
+# --- which parameters are FREE in fitted_R mode (edit this to change
+# what's fit vs fixed -- e.g. add "log10eps_B" here to fit eps_B instead
+# of holding it at FIXED_PARAMS["eps_B"]). Anything not listed here stays
+# fixed at its FIXED_PARAMS value. A "log10<name>" entry samples in log10
+# space and is converted back to a linear value automatically; anything
+# without that prefix (a, BG) is sampled directly. ---
+FREE_PARAMS_FITTED_R = ["a", "log10R", "BG", "log10n0"]
+# e.g. for eps_B free instead of fixed:
+# FREE_PARAMS_FITTED_R = ["a", "log10R", "BG", "log10n0", "log10eps_B"]
+
 # --- which electron populations to include in the model ---
 THERM_EL = True
 PL_EL    = True
 
-# --- priors for the free parameters (uniform on the given [lo, hi]) ---
-# fitted_R mode fits: a, log10R, BG, log10n0
+# --- priors for the free parameters (uniform on the given [lo, hi]).
+# Only whichever ones are listed in FREE_PARAMS_FITTED_R actually get
+# sampled -- the rest of this dict just sits here unused, so it's safe to
+# leave entries for parameters you're not currently fitting as free. ---
 PRIORS_FITTED_R = dict(
-    a       = (0.5, 4.0),
-    log10R  = (14.0, 18.0),
-    BG      = (0.01, 2.10),
-    log10n0 = (-2.0, 6.0),
+    a          = (0.5, 4.0),
+    log10R     = (14.0, 18.0),
+    BG         = (0.01, 2.10),
+    log10n0    = (-2.0, 6.0),
+    # eps_B in (0.001, 0.5) -> log10 space (-3.0, -0.301). The
+    # eps_e+eps_B+eps_T<=1 physicality cut (checked dynamically per-sample)
+    # will additionally carve out any unphysical corner within this range.
+    log10eps_B = (-3.0, -0.301),
 )
 # dynamical mode fits: a, BG0, alpha, log10n0 (shared across all epochs)
 # NOTE: alpha bounds are a rough placeholder -- tune these.
@@ -316,15 +332,28 @@ def natural_xy_limits(nu_grid, curves, freq_data=None, flux_data=None,
     return xlim, ylim
 
 
-def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el):
+def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
+                        free_labels=None):
+    free_keys = set()
+    if free_labels:
+        free_keys = {(lab[5:] if lab.startswith("log10") else lab)
+                     for lab in free_labels}
+
     lines = [f"Configuration for {tag}", "=" * (len(tag) + 15), "",
              "Fixed (non-fit) parameters:"]
     for k, v in fixed.items():
+        if k in free_keys:
+            continue  # this one is free for this run -- listed below instead
         lines.append(f"  {k:8s} = {v}")
     lines += ["", "therm_el = " + str(therm_el), "pl_el    = " + str(pl_el),
-              "", "Priors (uniform) for free parameters:"]
-    for k, (lo, hi) in priors.items():
-        lines.append(f"  {k:8s} : ({lo}, {hi})")
+              "", "Free parameters (uniform priors):"]
+    if free_labels:
+        for lab in free_labels:
+            lo, hi = priors[lab]
+            lines.append(f"  {lab:12s} : ({lo}, {hi})")
+    else:
+        for k, (lo, hi) in priors.items():
+            lines.append(f"  {k:8s} : ({lo}, {hi})")
     with open(os.path.join(plots_dir, f"{tag}_config.txt"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
 
@@ -469,13 +498,21 @@ def log_prior_box(theta, labels, bounds):
     return 0.0
 
 
-def check_physicality(fixed):
-    """eps_e + eps_B + eps_T <= 1 must hold (fraction of energy budget)."""
-    total = fixed["eps_e"] + fixed["eps_B"] + fixed["eps_T"]
+def check_physicality(fixed, free_labels=()):
+    """eps_e + eps_B + eps_T <= 1 must hold (fraction of energy budget).
+    Any of these that are FREE parameters (in free_labels) get checked
+    dynamically per-sample in log_prob instead -- skip them here rather
+    than judging by whatever placeholder value sits in FIXED_PARAMS."""
+    free_keys = {(lab[5:] if lab.startswith("log10") else lab) for lab in free_labels}
+    eps_e = 0.0 if "eps_e" in free_keys else fixed["eps_e"]
+    eps_B = 0.0 if "eps_B" in free_keys else fixed["eps_B"]
+    eps_T = 0.0 if "eps_T" in free_keys else fixed["eps_T"]
+    total = eps_e + eps_B + eps_T
     if total > 1.0:
         raise ValueError(
-            f"eps_e + eps_B + eps_T = {total:.3f} > 1.0 -- not physical. "
-            f"Adjust FIXED_PARAMS."
+            f"eps_e + eps_B + eps_T = {total:.3f} > 1.0 -- not physical "
+            f"(checked over the currently-FIXED subset only; free ones are "
+            f"checked per-sample during sampling). Adjust FIXED_PARAMS."
         )
 
 
@@ -483,34 +520,56 @@ def check_physicality(fixed):
 # LIKELIHOODS + LOG-PROB (module level, for picklability with mp spawn)
 # =====================================================================
 
-PARAM_LABELS_FITTED_R  = ["a", "log10R", "BG", "log10n0"]
 PARAM_LABELS_DYNAMICAL = ["a", "BG0", "alpha", "log10n0"]
 
 
-def _fnu_fitted_R(theta, freq, T, z, d_L, fixed, therm_el, pl_el):
-    a, log10R, BG, log10n0 = theta
-    R = 10.0 ** log10R
-    n0 = 10.0 ** log10n0
+def _build_theta_params(theta, labels, fixed):
+    """Merge FIXED_PARAMS with the free parameters from theta into one
+    physical-parameter dict. A label prefixed with 'log10' is converted to
+    its linear value under that key (e.g. 'log10eps_B' -> params['eps_B']
+    = 10**theta_value), overriding whatever FIXED_PARAMS had for it."""
+    params = dict(fixed)
+    for lab, val in zip(labels, theta):
+        if lab.startswith("log10"):
+            params[lab[5:]] = 10.0 ** val
+        else:
+            params[lab] = val
+    return params
+
+
+def _fnu_fitted_R(theta, labels, freq, T, z, d_L, fixed, therm_el, pl_el):
+    p = _build_theta_params(theta, labels, fixed)
     Lnu = flux_variables.LOS_IHG_Fitted_R(
-        freq, fixed["s"], a, fixed["delta"], R, T, n0,
-        fixed["eps_e"], fixed["eps_B"], fixed["eps_T"], fixed["p"],
-        fixed["mu_u"], fixed["mu_e"], BG, fixed["k"], d_L, z,
+        freq, p["s"], p["a"], p["delta"], p["R"], T, p["n0"],
+        p["eps_e"], p["eps_B"], p["eps_T"], p["p"],
+        p["mu_u"], p["mu_e"], p["BG"], p["k"], d_L, z,
         therm_el=therm_el, pl_el=pl_el,
     )
     return Lnu / (4.0 * np.pi * d_L ** 2) / C.Jy
 
 
 def log_prob_fitted_R(theta, freq, flux, eflux, T, z, d_L, fixed,
-                       therm_el, pl_el, bounds):
-    lp = log_prior_box(theta, PARAM_LABELS_FITTED_R, bounds)
-    a = theta[0]
-    if not (0.5 < a < _a_upper_bound(fixed["p"], fixed["delta"])):
-        return -np.inf
+                       therm_el, pl_el, bounds, labels):
+    lp = log_prior_box(theta, labels, bounds)
     if not np.isfinite(lp):
         return -np.inf
 
+    p = _build_theta_params(theta, labels, fixed)
+
+    if not (0.5 < p["a"] < _a_upper_bound(p["p"], p["delta"])):
+        return -np.inf
+    # Dynamic physicality check -- matters whenever eps_e/eps_B/eps_T are
+    # free (their FIXED_PARAMS placeholder doesn't apply per-sample).
+    if p["eps_e"] + p["eps_B"] + p["eps_T"] > 1.0:
+        return -np.inf
+
     try:
-        Fnu_model = _fnu_fitted_R(theta, freq, T, z, d_L, fixed, therm_el, pl_el)
+        Fnu_model = flux_variables.LOS_IHG_Fitted_R(
+            freq, p["s"], p["a"], p["delta"], p["R"], T, p["n0"],
+            p["eps_e"], p["eps_B"], p["eps_T"], p["p"],
+            p["mu_u"], p["mu_e"], p["BG"], p["k"], d_L, z,
+            therm_el=therm_el, pl_el=pl_el,
+        ) / (4.0 * np.pi * d_L ** 2) / C.Jy
         chi2 = np.sum(((flux - Fnu_model) / eflux) ** 2)
         ll = -0.5 * chi2
     except Exception:
@@ -734,7 +793,7 @@ def save_chain_outputs(data_dir, plots_dir, tag, title_str, sampler, labels, T=N
 
 
 def plot_sed_fitted_R(plots_dir, tag, title_str, epoch_data, flat, flat_lp, fixed,
-                       therm_el, pl_el, n_draws=60):
+                       labels, therm_el, pl_el, n_draws=60):
     # Axis limits (both grid AND display) come directly from the data's own
     # min/max, padded by SED_PAD_DEX so the fit shows a little beyond the
     # data on each side. nu_grid is generated over EXACTLY this same range,
@@ -760,12 +819,12 @@ def plot_sed_fitted_R(plots_dir, tag, title_str, epoch_data, flat, flat_lp, fixe
     # density -- no extra chi2 filtering needed on top.
     idx = np.random.choice(len(flat), size=min(n_draws, len(flat)), replace=False)
     for i in idx:
-        Fnu = _fnu_fitted_R(flat[i], nu_grid, epoch_data["T"], epoch_data["z"],
+        Fnu = _fnu_fitted_R(flat[i], labels, nu_grid, epoch_data["T"], epoch_data["z"],
                              epoch_data["d_L"], fixed, therm_el, pl_el)
         ax.plot(nu_grid, Fnu, color="steelblue", alpha=0.15, lw=1)
 
     best = flat[np.argmax(flat_lp)]
-    Fnu_best = _fnu_fitted_R(best, nu_grid, epoch_data["T"], epoch_data["z"],
+    Fnu_best = _fnu_fitted_R(best, labels, nu_grid, epoch_data["T"], epoch_data["z"],
                               epoch_data["d_L"], fixed, therm_el, pl_el)
     # NOTE: "Max Likelihood" and "MAP" are the same point here specifically
     # because the priors are flat/uniform within bounds (log_prior is a
@@ -858,23 +917,28 @@ def _load_fitted_R_summaries(outdir, run_tag, source):
 
     # Unit conversions for display (evolution + density-profile plots only;
     # corner/trace plots intentionally keep the raw sampler parameterization
-    # -- a, log10R, BG, log10n0 -- unchanged).
-    # 10**x and BG->beta are both monotonic increasing, so transforming the
-    # already-computed percentile columns directly is exact.
+    # unchanged). 10**x and BG->beta are both monotonic increasing, so
+    # transforming the already-computed percentile columns directly is
+    # exact -- no need to reload the full posterior.
     for stat in ["median", "lo68", "hi68", "best"]:
         df[f"R_{stat}"]    = 10.0 ** df[f"log10R_{stat}"]
         df[f"n0_{stat}"]   = 10.0 ** df[f"log10n0_{stat}"]
         df[f"beta_{stat}"] = _beta_from_BG(df[f"BG_{stat}"])
+        # eps_B only present if it was a FREE param for this run (e.g. a
+        # run4/5-style config) -- auto-detected rather than assumed.
+        if f"log10eps_B_{stat}" in df.columns:
+            df[f"eps_B_{stat}"] = 10.0 ** df[f"log10eps_B_{stat}"]
 
     return df
 
 
 EVOLUTION_DISPLAY_PARAMS = ["a", "R", "beta", "n0"]
 EVOLUTION_AXIS_INFO = {
-    "a":    (r"$a$",                    False),
-    "R":    (r"$R$ (cm)",               True),
-    "beta": (r"$\beta$",                False),
-    "n0":   (r"$n_0$ (cm$^{-3}$)",      True),
+    "a":     (r"$a$",                    False),
+    "R":     (r"$R$ (cm)",               True),
+    "beta":  (r"$\beta$",                False),
+    "n0":    (r"$n_0$ (cm$^{-3}$)",      True),
+    "eps_B": (r"$\epsilon_B$",           True),
 }
 
 
@@ -883,10 +947,15 @@ def make_evolution_plot(outdir, run_tag, source):
     os.makedirs(plots_rundir, exist_ok=True)
     df = _load_fitted_R_summaries(outdir, run_tag, source)
 
-    fig, axes = plt.subplots(len(EVOLUTION_DISPLAY_PARAMS), 1,
-                              figsize=(7, 2.5 * len(EVOLUTION_DISPLAY_PARAMS)),
+    # base 4 always shown; eps_B only if it was actually free for this run
+    display_params = list(EVOLUTION_DISPLAY_PARAMS)
+    if "eps_B_median" in df.columns:
+        display_params.append("eps_B")
+
+    fig, axes = plt.subplots(len(display_params), 1,
+                              figsize=(7, 2.5 * len(display_params)),
                               sharex=True)
-    for j, (ax, key) in enumerate(zip(np.atleast_1d(axes), EVOLUTION_DISPLAY_PARAMS)):
+    for j, (ax, key) in enumerate(zip(np.atleast_1d(axes), display_params)):
         med  = df[f"{key}_median"].values
         lo   = df[f"{key}_lo68"].values
         hi   = df[f"{key}_hi68"].values
@@ -920,7 +989,9 @@ def make_density_profile_plot(df, plots_rundir, source):
     """n0 (cm^-3) vs R (cm), points connected in time order (i.e. tracing
     the shock's actual trajectory through (R, n0) space as it expands) --
     median +/- 68% in red, Max Likelihood (no error bars) in faint blue,
-    each with its own dashed connecting line."""
+    each with its own dashed connecting line. Also overlays m=-2/m=-3
+    power-law reference slopes anchored on the first (earliest-epoch)
+    Max Likelihood point."""
     fig, ax = plt.subplots(figsize=(7, 5))
 
     yerr_med = np.vstack([df["n0_median"] - df["n0_lo68"],
@@ -931,6 +1002,20 @@ def make_density_profile_plot(df, plots_rundir, source):
             label="Max Likelihood")
 
     ax.set_xscale("log"); ax.set_yscale("log")
+    # capture the data-driven view before adding reference lines, so the
+    # power-law overlays span the full plot width without stretching the
+    # axes themselves (their y-values can shoot far outside the data range
+    # at the edges since they're steep slopes)
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+
+    R_anchor, n0_anchor = df["R_best"].iloc[0], df["n0_best"].iloc[0]
+    R_line = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 200)
+    ax.plot(R_line, n0_anchor * (R_line / R_anchor) ** -2,
+            color="black", ls="-.", lw=1.2, label="m=-2")
+    ax.plot(R_line, n0_anchor * (R_line / R_anchor) ** -3,
+            color="black", ls=":", lw=1.2, label="m=-3")
+
+    ax.set_xlim(xlim); ax.set_ylim(ylim)
     ax.set_xlabel(r"$R$ (cm)"); ax.set_ylabel(r"$n_0$ (cm$^{-3}$)")
     name = SOURCE_DISPLAY_NAMES.get(source, source)
     ax.set_title(f"{name} -- Density Profile")
@@ -968,11 +1053,20 @@ def make_sed_collage(cfg, fixed):
                               constrained_layout=True)
     ax_flat = np.atleast_1d(axes).reshape(-1)
 
+    print(f"    NOTE: SED curves are reconstructed using CURRENT FIXED_PARAMS "
+          f"for whatever wasn't free in each epoch's fit -- compare against "
+          f"that epoch's *_config.txt if unsure it matches.")
+
     for k, f in enumerate(files):
         row = pd.read_csv(f).iloc[0]
         epoch_idx = int(re.search(r"ep(\d+)_summary", f).group(1))
         ep = get_epoch_data(source, epoch_idx)
-        theta_best = np.array([row[f"{lab}_best"] for lab in PARAM_LABELS_FITTED_R])
+        # auto-discover which params were actually free for THIS epoch's
+        # run, straight from its saved summary columns -- more robust than
+        # trusting the current control panel's free-param list to match.
+        best_cols = [c for c in row.index if c.endswith("_best")]
+        free_labels = [c[:-len("_best")] for c in best_cols]
+        theta_best = np.array([row[c] for c in best_cols])
 
         freq_data, flux_data = ep["freq"], ep["flux"]
         log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
@@ -984,8 +1078,9 @@ def make_sed_collage(cfg, fixed):
         ax = ax_flat[k]
         ax.errorbar(freq_data, flux_data, yerr=ep["eflux"], fmt="o", ms=5,
                     color="k", zorder=5)
-        Fnu_best = _fnu_fitted_R(theta_best, nu_grid, ep["T"], ep["z"], ep["d_L"],
-                                  fixed, cfg["therm_el"], cfg["pl_el"])
+        Fnu_best = _fnu_fitted_R(theta_best, free_labels, nu_grid, ep["T"],
+                                  ep["z"], ep["d_L"], fixed,
+                                  cfg["therm_el"], cfg["pl_el"])
         ax.plot(nu_grid, Fnu_best, color="crimson", lw=2.2)
 
         ax.set_xlim(xlim); ax.set_ylim(ylim)
@@ -1013,7 +1108,8 @@ def make_sed_collage(cfg, fixed):
 # at the baseline/center), for the 4 fitted_R free params plus the 7
 # fixed microphysical/geometric params (mu_u, mu_e excluded).
 
-KNOB_ORDER = PARAM_LABELS_FITTED_R + ["s", "delta", "eps_e", "eps_T", "p", "k", "eps_B"]
+KNOB_ORDER = ["a", "log10R", "BG", "log10n0", "s", "delta", "eps_e", "eps_T",
+              "p", "k", "eps_B"]
 
 
 def _knob_bounds_and_logspace():
@@ -1025,19 +1121,27 @@ def _knob_bounds_and_logspace():
 
 
 def _knob_center(cfg):
-    """Center/baseline values for all 11 dials, plus T/z/d_L to evaluate at."""
+    """Center/baseline values for all 11 dials, plus T/z/d_L to evaluate at.
+    The 4 canonical fitted_R params (a, log10R, BG, log10n0) always come
+    from here regardless of what a given run's --free_params happened to
+    be; if --knob_from_summary points at a run where eps_B was ALSO free
+    (e.g. a run4/5-style config), that fitted eps_B value is picked up too
+    rather than silently falling back to FIXED_PARAMS's eps_B."""
     center = dict(FIXED_PARAMS)  # s, delta, eps_e, eps_T, p, mu_u, mu_e, k, eps_B
     z = SOURCE_INFO[cfg["knob_source"]]["z"]
     d_L = Planck18.luminosity_distance(z).cgs.value
 
+    canonical = ["a", "log10R", "BG", "log10n0"]
     if cfg["knob_from_summary"]:
         df = pd.read_csv(cfg["knob_from_summary"])
         row = df.iloc[0]
-        for lab in PARAM_LABELS_FITTED_R:
+        for lab in canonical:
             center[lab] = row[f"{lab}_best"]
+        if "log10eps_B_best" in row:
+            center["eps_B"] = 10.0 ** row["log10eps_B_best"]
         T = float(row["T"]) if "T" in row else cfg["knob_T"]
     else:
-        for lab in PARAM_LABELS_FITTED_R:
+        for lab in canonical:
             center[lab] = float(np.mean(PRIORS_FITTED_R[lab]))
         T = cfg["knob_T"]
 
@@ -1135,9 +1239,8 @@ def make_knob_plot(cfg):
 # TIMING UTILITY
 # =====================================================================
 
-def time_single_eval(log_prob_fn, args, n_reps=3):
-    bounds = args[-1]
-    theta_mid = np.array([np.mean(b) for b in bounds.values()])
+def time_single_eval(log_prob_fn, args, labels, bounds, n_reps=3):
+    theta_mid = np.array([np.mean(bounds[lab]) for lab in labels])
     t0 = time.time()
     for _ in range(n_reps):
         log_prob_fn(theta_mid, *args)
@@ -1150,12 +1253,14 @@ def time_single_eval(log_prob_fn, args, n_reps=3):
 
 def run_fitted_R(source, epoch_idx, cfg, fixed):
     print(f"\n=== [fitted_R] {source} epoch {epoch_idx} ===")
+    labels = cfg["free_params_fitted_R"]
+    priors = cfg["priors_fitted_R"]
     ep = get_epoch_data(source, epoch_idx)
     args = (ep["freq"], ep["flux"], ep["eflux"], ep["T"], ep["z"], ep["d_L"],
-             fixed, cfg["therm_el"], cfg["pl_el"], PRIORS_FITTED_R)
+             fixed, cfg["therm_el"], cfg["pl_el"], priors, labels)
 
     if cfg["time_only"]:
-        t_eval = time_single_eval(log_prob_fitted_R, args)
+        t_eval = time_single_eval(log_prob_fitted_R, args, labels, priors)
         est_total = t_eval * cfg["nwalkers"] * cfg["nsamples"]
         print(f"    single log_prob eval: {t_eval*1e3:.2f} ms")
         print(f"    est. total for nwalkers={cfg['nwalkers']}, "
@@ -1169,17 +1274,16 @@ def run_fitted_R(source, epoch_idx, cfg, fixed):
     plots_dir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"], tag)
     os.makedirs(plots_dir, exist_ok=True)
 
-    save_run_config_txt(plots_dir, tag, fixed, PRIORS_FITTED_R,
-                        cfg["therm_el"], cfg["pl_el"])
+    save_run_config_txt(plots_dir, tag, fixed, priors,
+                        cfg["therm_el"], cfg["pl_el"], free_labels=labels)
 
-    sampler = run_sampler(tag, data_dir, len(PARAM_LABELS_FITTED_R),
-                           PARAM_LABELS_FITTED_R, PRIORS_FITTED_R,
+    sampler = run_sampler(tag, data_dir, len(labels), labels, priors,
                            log_prob_fitted_R, args, cfg)
 
     flat, flat_lp, _ = save_chain_outputs(data_dir, plots_dir, tag, title_str,
-                                          sampler, PARAM_LABELS_FITTED_R, T=ep["T"])
+                                          sampler, labels, T=ep["T"])
     plot_sed_fitted_R(plots_dir, tag, title_str, ep, flat, flat_lp, fixed,
-                       cfg["therm_el"], cfg["pl_el"])
+                       labels, cfg["therm_el"], cfg["pl_el"])
 
 
 def run_dynamical(source, cfg, fixed):
@@ -1188,7 +1292,8 @@ def run_dynamical(source, cfg, fixed):
     args = (epochs, fixed, cfg["therm_el"], cfg["pl_el"], PRIORS_DYNAMICAL)
 
     if cfg["time_only"]:
-        t_eval = time_single_eval(log_prob_dynamical, args)
+        t_eval = time_single_eval(log_prob_dynamical, args,
+                                   PARAM_LABELS_DYNAMICAL, PRIORS_DYNAMICAL)
         est_total = t_eval * cfg["nwalkers"] * cfg["nsamples"]
         print(f"    single log_prob eval ({len(epochs)} epochs): "
               f"{t_eval*1e3:.1f} ms")
@@ -1240,11 +1345,24 @@ def replot_fitted_R(source, epoch_idx, cfg, fixed):
     data_dir = os.path.join(cfg["outdir"], "data", cfg["run_tag"], tag)
     plots_dir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"], tag)
     backend_path = os.path.join(data_dir, f"{tag}_chain.h5")
+    summary_path = os.path.join(data_dir, f"{tag}_summary.csv")
 
     if not os.path.exists(backend_path):
         print(f"    SKIP {tag}: no chain found at {backend_path}")
         return
+    if not os.path.exists(summary_path):
+        print(f"    SKIP {tag}: no summary.csv found at {summary_path} "
+              f"(needed to recover which params were free for this run)")
+        return
     os.makedirs(plots_dir, exist_ok=True)
+
+    # Recover the ACTUAL free-param labels used for this run from its own
+    # saved summary -- robust regardless of what the CURRENT control panel's
+    # FREE_PARAMS_FITTED_R happens to be (avoids ndim/label mismatches when
+    # replotting a run made with a different free-parameter configuration,
+    # e.g. one where eps_B was free and the current config doesn't have it).
+    summary_row = pd.read_csv(summary_path).iloc[0]
+    labels = [c[:-len("_best")] for c in summary_row.index if c.endswith("_best")]
 
     old_config = os.path.join(plots_dir, f"{tag}_config.txt")
     if os.path.exists(old_config):
@@ -1252,18 +1370,20 @@ def replot_fitted_R(source, epoch_idx, cfg, fixed):
               f"compare it to current FIXED_PARAMS before trusting the SED panel.")
     else:
         print(f"    NOTE: no saved config for {tag} (pre-dates that feature) -- "
-              f"using CURRENT FIXED_PARAMS/priors to draw the SED; verify "
-              f"these match what was actually used for this run.")
+              f"using CURRENT FIXED_PARAMS to draw the SED for whatever "
+              f"wasn't free (free params themselves were recovered from "
+              f"this run's own summary.csv: {labels}); verify FIXED_PARAMS "
+              f"matches what was actually used for this run.")
 
     backend = HDFBackend(backend_path)
     ep = get_epoch_data(source, epoch_idx)
 
-    save_run_config_txt(plots_dir, tag, fixed, PRIORS_FITTED_R,
-                        cfg["therm_el"], cfg["pl_el"])
+    save_run_config_txt(plots_dir, tag, fixed, cfg["priors_fitted_R"],
+                        cfg["therm_el"], cfg["pl_el"], free_labels=labels)
     flat, flat_lp, _ = save_chain_outputs(data_dir, plots_dir, tag, title_str,
-                                          backend, PARAM_LABELS_FITTED_R, T=ep["T"])
+                                          backend, labels, T=ep["T"])
     plot_sed_fitted_R(plots_dir, tag, title_str, ep, flat, flat_lp, fixed,
-                       cfg["therm_el"], cfg["pl_el"])
+                       labels, cfg["therm_el"], cfg["pl_el"])
     print(f"    replotted {tag}")
 
 
@@ -1341,6 +1461,27 @@ def parse_args():
     p.add_argument("--no-therm_el", dest="therm_el", action="store_false")
     p.add_argument("--pl_el", dest="pl_el", action="store_true", default=None)
     p.add_argument("--no-pl_el", dest="pl_el", action="store_false")
+
+    # fixed (non-fit) microphysical param overrides -- lets you launch
+    # different configs (run2, run3, ...) without editing FIXED_PARAMS
+    p.add_argument("--eps_B", type=float, default=None)
+    p.add_argument("--eps_e", type=float, default=None)
+    p.add_argument("--eps_T", type=float, default=None)
+    p.add_argument("--p_index", type=float, default=None, dest="p_index",
+                   help="power-law electron index p (renamed from --p to "
+                        "avoid clashing with argparse's own conventions)")
+    p.add_argument("--k", type=float, default=None)
+    p.add_argument("--s", type=float, default=None)
+    p.add_argument("--delta", type=float, default=None)
+
+    # which params are free in fitted_R mode (default: FREE_PARAMS_FITTED_R)
+    p.add_argument("--free_params", default=None,
+                   help="comma-separated free-param list, e.g. "
+                        "'a,log10R,BG,log10n0,log10eps_B' to fit eps_B too")
+    p.add_argument("--log10eps_B_bounds", type=float, nargs=2, default=None,
+                   metavar=("LO", "HI"),
+                   help="override the log10eps_B prior bounds (only used "
+                        "if log10eps_B is in --free_params)")
     return p.parse_args()
 
 
@@ -1350,6 +1491,21 @@ def _resolve(cli_val, panel_val):
 
 def build_config():
     cli = parse_args()
+
+    fixed = dict(FIXED_PARAMS)
+    for key, cli_val in [("eps_B", cli.eps_B), ("eps_e", cli.eps_e),
+                          ("eps_T", cli.eps_T), ("p", cli.p_index),
+                          ("k", cli.k), ("s", cli.s), ("delta", cli.delta)]:
+        if cli_val is not None:
+            fixed[key] = cli_val
+
+    free_params_fitted_R = (cli.free_params.split(",") if cli.free_params
+                             else list(FREE_PARAMS_FITTED_R))
+
+    priors_fitted_R = dict(PRIORS_FITTED_R)
+    if cli.log10eps_B_bounds is not None:
+        priors_fitted_R["log10eps_B"] = tuple(cli.log10eps_B_bounds)
+
     cfg = dict(
         mode        = _resolve(cli.mode, MODE),
         source      = _resolve(cli.source, SOURCE),
@@ -1376,14 +1532,17 @@ def build_config():
         convergence_check_every = CONVERGENCE_CHECK_EVERY,
         convergence_ntau        = CONVERGENCE_NTAU,
         convergence_rtol        = CONVERGENCE_RTOL,
+        fixed                 = fixed,
+        free_params_fitted_R  = free_params_fitted_R,
+        priors_fitted_R       = priors_fitted_R,
     )
     return cfg
 
 
 def main():
     cfg = build_config()
-    fixed = dict(FIXED_PARAMS)
-    check_physicality(fixed)
+    fixed = cfg["fixed"]
+    check_physicality(fixed, cfg["free_params_fitted_R"])
 
     if cfg["make_evolution_plot"]:
         make_evolution_plot(cfg["outdir"], cfg["run_tag"], cfg["source"])
@@ -1445,6 +1604,30 @@ if __name__ == "__main__":
 # # single epoch, fitted_R (independent per-epoch fit: a, log10R, BG, log10n0)
 # python runSampler.py --mode fitted_R --source wpp --epoch 3 \
 #     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#
+# --- 1b. DIFFERENT FIXED-PARAM / FREE-PARAM CONFIGS (run2, run3, ...) --
+#     without editing FIXED_PARAMS/FREE_PARAMS_FITTED_R in the file ---
+# # run2: eps_B fixed at 0.01 instead of 0.1
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run2 --eps_B 0.01
+#
+# # run3: eps_e fixed at 0.01 instead of 0.1 (eps_B back to default 0.1)
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run3 --eps_e 0.01
+#
+# # run4: eps_B FREE instead of fixed (5 free params now: a, log10R, BG,
+# #        log10n0, log10eps_B). Physicality (eps_e+eps_B+eps_T<=1) is
+# #        checked dynamically per-sample, no extra flag needed.
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run4 \
+#     --free_params a,log10R,BG,log10n0,log10eps_B
+#
+# # run5: same as run4, plus eps_e fixed at 0.01
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run5 \
+#     --free_params a,log10R,BG,log10n0,log10eps_B --eps_e 0.01
+#
+# (repeat all of the above with --source dbl and its own --dir too)
 #
 # # every epoch of a source in one local call (fitted_R only; on SLURM,
 # # submit one array task per epoch instead -- see run_fitted_R.slurm)
