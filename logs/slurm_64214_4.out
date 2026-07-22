@@ -1,0 +1,11 @@
+
+=== [fitted_R] wpp epoch 4 ===
+    walker init batch 1: 24/24 valid
+    WARNING: autocorr time unreliable (The chain is shorter than 50 times the integrated autocorrelation time for 2 parameter(s). Use this estimate with caution and run a longer chain!
+N/50 = 2000;
+tau: [1986.11719649 1879.17993907 4409.0043279  4391.72736713]); falling back to 20% burn-in, thin=1. Consider more steps.
+    [wpp_fittedR_ep4] posterior summary:
+      a: 3.836  (+0.113 / -2.93)  best=3.991
+      log10R: 17.51  (+0.286 / -0.367)  best=17.02
+      BG: 0.9766  (+0.418 / -0.412)  best=0.7662
+      log10n0: -0.6046  (+1.07 / -0.983)  best=0.505

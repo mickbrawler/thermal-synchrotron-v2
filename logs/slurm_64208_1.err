@@ -1,0 +1,2 @@
+You must install the tqdm library to use progress indicators with emcee
+slurmstepd-c0009: error: *** JOB 64209 ON c0009 CANCELLED AT 2026-07-21T20:17:02 ***

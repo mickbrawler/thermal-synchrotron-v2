@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/home/fs01/mc2923/thermal-synchrotron-v2/runSampler.py", line 851, in <module>
+    main()
+  File "/home/fs01/mc2923/thermal-synchrotron-v2/runSampler.py", line 841, in main
+    run_fitted_R(cfg["source"], ep, cfg, fixed)
+  File "/home/fs01/mc2923/thermal-synchrotron-v2/runSampler.py", line 728, in run_fitted_R
+    sampler = run_sampler(tag, rundir, len(PARAM_LABELS_FITTED_R),
+  File "/home/fs01/mc2923/thermal-synchrotron-v2/runSampler.py", line 469, in run_sampler
+    backend = HDFBackend(backend_path)
+  File "/home/fs01/mc2923/R/lib64/python3.9/site-packages/emcee/backends/hdf.py", line 67, in __init__
+    raise ImportError("you must install 'h5py' to use the HDFBackend")
+ImportError: you must install 'h5py' to use the HDFBackend

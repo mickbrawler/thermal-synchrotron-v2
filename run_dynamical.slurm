@@ -28,7 +28,7 @@ module purge
 module load gcc/11.4.0
 source /home/fs01/mc2923/R/bin/activate
 
-python mcmc_lfbot_fit.py \
+python runSampler.py \
     --mode dynamical \
     --source "$SOURCE" \
     --nwalkers "$NWALKERS" \

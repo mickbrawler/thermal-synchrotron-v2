@@ -161,6 +161,7 @@ MAKE_EVOLUTION_PLOT = False
 
 # EDIT to match your machine / where you keep the raw data files.
 _FILE_DIR = "/Users/michaelcamilo/research/tools_of_the_trade/files/"
+_FILE_DIR = "/home/fs01/mc2923/thermal-synchrotron-v2"
 
 T0_MJD_WPP = 60579.37093750
 T0_MJD_DBL = 61085.34930556
