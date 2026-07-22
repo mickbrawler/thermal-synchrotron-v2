@@ -1,0 +1,20 @@
+run1 for both dbl and wpp consisted of:
+
+108 FIXED_PARAMS = dict(
+109     s      = 1e5,    # effective range of B-field values B1/B0
+110     delta  = 1.0,     # index relating n ~ n_hom * B^delta
+111     eps_e  = 0.1,     # fraction of energy in power-law electrons
+112     eps_T  = 0.4,     # fraction of energy in thermal electrons
+113     p      = 3.0,     # power-law electron index
+114     mu_u   = 0.62,
+115     mu_e   = 1.18,
+116     k      = 0.0,     # power-law index for stratified density (0=uniform)
+117     eps_B  = 0.1,     # fraction of energy in B-field -- FIXED. try 0.01 too
+118 )
+
+127     a       = (0.5, 4.0),
+128     log10R  = (14.0, 18.0),
+129     BG      = (0.01, 2.10),
+130     log10n0 = (-2.0, 6.0),
+
+12 cpus, 24 walkers, 1e5 samples
