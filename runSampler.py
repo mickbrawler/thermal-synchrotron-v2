@@ -142,6 +142,13 @@ PRIORS_DYNAMICAL = dict(
 SNR_THRESHOLD       = 3.0
 FLUX_ERR_FLOOR_FRAC = 0.10    # 10% error floor
 
+# --- SED plot axis padding: how far beyond the data's own min/max (in log10
+# decades) the displayed axis and evaluated fit curve extend on each side.
+# 0.15 dex ~= factor of 1.4 in frequency/flux -- "a little" beyond the data,
+# not a fixed multi-decade span. Same value drives both nu_grid's range and
+# the axis limits, so the lines always reach the plot edges (no dead margin).
+SED_PAD_DEX = 0.15
+
 # --- output ---
 OUTDIR  = "./mcmc_output"
 RUN_TAG = "1"            # subdirectory label, a la your old SLURM $DIR;
@@ -717,16 +724,21 @@ def save_chain_outputs(data_dir, plots_dir, tag, title_str, sampler, labels, T=N
 
 def plot_sed_fitted_R(plots_dir, tag, title_str, epoch_data, flat, flat_lp, fixed,
                        therm_el, pl_el, n_draws=60):
-    # Evaluate a bit wider than the data span so the curve visibly extends
-    # "to the left and right" of the fit; natural_xy_limits then trims the
-    # DISPLAYED window to where there's actually signal (+ padding), rather
-    # than a fixed multi-decade span.
+    # Axis limits (both grid AND display) come directly from the data's own
+    # min/max, padded by SED_PAD_DEX so the fit shows a little beyond the
+    # data on each side. nu_grid is generated over EXACTLY this same range,
+    # so the plotted lines reach the plot edges with no dead margin.
     freq_data = epoch_data["freq"]
-    nu_grid = np.logspace(np.log10(freq_data.min()) - 1.0,
-                           np.log10(freq_data.max()) + 1.0, 400)
+    flux_data = epoch_data["flux"]
+    log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
+    xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
+    nu_grid = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 400)
+
+    log_ylo, log_yhi = np.log10(flux_data.min()), np.log10(flux_data.max())
+    ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.errorbar(freq_data, epoch_data["flux"], yerr=epoch_data["eflux"],
+    ax.errorbar(freq_data, flux_data, yerr=epoch_data["eflux"],
                 fmt="o", ms=5, color="k", zorder=5, label="Data")
 
     # Blue curves = SEDs evaluated at `n_draws` random DRAWS FROM THE FULL
@@ -736,27 +748,21 @@ def plot_sed_fitted_R(plots_dir, tag, title_str, epoch_data, flat, flat_lp, fixe
     # denser/more-overlapping blue curves already reflect higher posterior
     # density -- no extra chi2 filtering needed on top.
     idx = np.random.choice(len(flat), size=min(n_draws, len(flat)), replace=False)
-    curves = []
     for i in idx:
         Fnu = _fnu_fitted_R(flat[i], nu_grid, epoch_data["T"], epoch_data["z"],
                              epoch_data["d_L"], fixed, therm_el, pl_el)
-        curves.append(Fnu)
         ax.plot(nu_grid, Fnu, color="steelblue", alpha=0.15, lw=1)
 
     best = flat[np.argmax(flat_lp)]
     Fnu_best = _fnu_fitted_R(best, nu_grid, epoch_data["T"], epoch_data["z"],
                               epoch_data["d_L"], fixed, therm_el, pl_el)
-    curves.append(Fnu_best)
     # NOTE: "Max Likelihood" and "MAP" are the same point here specifically
     # because the priors are flat/uniform within bounds (log_prior is a
     # constant wherever finite) -- if you ever switch to non-uniform
     # priors, these would no longer coincide and this label should change.
     ax.plot(nu_grid, Fnu_best, color="crimson", lw=2.5, label="Max Likelihood")
 
-    xlim, ylim = natural_xy_limits(nu_grid, curves, freq_data=freq_data,
-                                    flux_data=epoch_data["flux"])
     ax.set_xlim(xlim); ax.set_ylim(ylim)
-
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlabel(r"$\nu$ (Hz)"); ax.set_ylabel(r"$F_\nu$ (Jy)")
     ax.set_title(title_str)
@@ -780,25 +786,26 @@ def plot_sed_dynamical(plots_dir, tag, title_str, epochs, flat, flat_lp, fixed,
     for k, ep in enumerate(epochs):
         ax = ax_flat[k]
         freq_data = ep["freq"]
-        nu_grid = np.logspace(np.log10(freq_data.min()) - 1.0,
-                               np.log10(freq_data.max()) + 1.0, 300)
-        ax.errorbar(freq_data, ep["flux"], yerr=ep["eflux"], fmt="o", ms=5,
+        flux_data = ep["flux"]
+        log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
+        xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
+        nu_grid = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 300)
+
+        log_ylo, log_yhi = np.log10(flux_data.min()), np.log10(flux_data.max())
+        ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
+
+        ax.errorbar(freq_data, flux_data, yerr=ep["eflux"], fmt="o", ms=5,
                     color="k", zorder=5)
-        curves = []
         # Blue curves here are also random draws from the joint posterior
         # (same note as plot_sed_fitted_R applies).
         for i in idx:
             Fnu = _fnu_dynamical(flat[i], nu_grid, ep["T"], ep["z"], ep["d_L"],
                                   fixed, therm_el, pl_el)
-            curves.append(Fnu)
             ax.plot(nu_grid, Fnu, color="steelblue", alpha=0.15, lw=1)
         Fnu_best = _fnu_dynamical(best, nu_grid, ep["T"], ep["z"], ep["d_L"],
                                    fixed, therm_el, pl_el)
-        curves.append(Fnu_best)
         ax.plot(nu_grid, Fnu_best, color="crimson", lw=2, label="Max Likelihood")
 
-        xlim, ylim = natural_xy_limits(nu_grid, curves, freq_data=freq_data,
-                                        flux_data=ep["flux"])
         ax.set_xlim(xlim); ax.set_ylim(ylim)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_title(f"epoch {ep['epoch']} | T={ep['T']:.1f}d")
