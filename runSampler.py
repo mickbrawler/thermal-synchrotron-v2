@@ -652,8 +652,12 @@ def plot_sed_dynamical(rundir, tag, epochs, flat, flat_lp, fixed,
 # =====================================================================
 
 def make_evolution_plot(outdir, run_tag, source):
-    rundir = os.path.join(outdir, run_tag)
-    pattern = os.path.join(rundir, f"{source}_fittedR_ep*", f"{source}_fittedR_ep*_summary.csv")
+    data_rundir = os.path.join(outdir, "data", run_tag)
+    plots_rundir = os.path.join(outdir, "plots", run_tag)
+    os.makedirs(plots_rundir, exist_ok=True)
+
+    pattern = os.path.join(data_rundir, f"{source}_fittedR_ep*",
+                            f"{source}_fittedR_ep*_summary.csv")
     files = sorted(glob.glob(pattern))
     if not files:
         raise FileNotFoundError(
@@ -683,12 +687,11 @@ def make_evolution_plot(outdir, run_tag, source):
     axes[-1].set_xlabel("T (observer-frame days)")
     fig.suptitle(f"{source} -- parameter evolution across epochs")
     fig.tight_layout()
-    outpath = os.path.join(rundir, f"{source}_param_evolution.png")
+    outpath = os.path.join(plots_rundir, f"{source}_param_evolution.png")
     fig.savefig(outpath, dpi=130)
     plt.close(fig)
     print(f"    saved -> {outpath}")
     return df
-
 
 # =====================================================================
 # TIMING UTILITY
