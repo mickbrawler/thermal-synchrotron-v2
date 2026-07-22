@@ -57,6 +57,7 @@ import os
 import sys
 import time
 import glob
+import re
 import argparse
 import multiprocessing as mp
 
@@ -161,6 +162,7 @@ RESUME  = False            # if True, continue an existing chain (same
 TIME_ONLY           = False
 MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
+MAKE_SED_COLLAGE     = False
 REPLOT               = False
 
 # --- "turning knobs" SED sensitivity plot (fitted_R model only) ---
@@ -437,8 +439,17 @@ def get_epoch_data(source, epoch_idx):
     eflux_ep = np.maximum(raw["fluxErr"][mask], FLUX_ERR_FLOOR_FRAC * flux_ep)
     freq_hz = raw["freq"][mask] * 1e9
 
+    # actual rest-frame time span/mean of the data points used (distinct
+    # from the EPOCH_GROUPS bin edges) -- used for SED collage titles
+    t_rest_ep = t_rest[mask]
+    t_rest_min = float(np.min(t_rest_ep))
+    t_rest_max = float(np.max(t_rest_ep))
+    t_rest_mean = float(np.mean(t_rest_ep))
+
     return dict(freq=freq_hz, flux=flux_ep, eflux=eflux_ep, T=T, z=z, d_L=d_L,
-                epoch=epoch_idx, source=source)
+                epoch=epoch_idx, source=source,
+                t_rest_min=t_rest_min, t_rest_max=t_rest_max,
+                t_rest_mean=t_rest_mean)
 
 
 def get_all_epochs(source):
@@ -820,14 +831,20 @@ def plot_sed_dynamical(plots_dir, tag, title_str, epochs, flat, flat_lp, fixed,
 
 
 # =====================================================================
-# EVOLUTION PLOT (aggregates per-epoch fitted_R summaries after the fact)
+# POST-HOC AGGREGATE PLOTS (read already-saved per-epoch fitted_R
+# summaries/data back off disk -- no resampling, no live sampler needed)
 # =====================================================================
 
-def make_evolution_plot(outdir, run_tag, source):
-    data_rundir = os.path.join(outdir, "data", run_tag)
-    plots_rundir = os.path.join(outdir, "plots", run_tag)
-    os.makedirs(plots_rundir, exist_ok=True)
+def _beta_from_BG(bg):
+    """Convert proper velocity Gamma*beta -> beta. Monotonic increasing
+    for bg >= 0, so applying it directly to already-computed percentiles
+    (median/lo68/hi68/best) is exact -- no need to reload full samples."""
+    bg = np.asarray(bg, dtype=float)
+    return bg / np.sqrt(1.0 + bg ** 2)
 
+
+def _load_fitted_R_summaries(outdir, run_tag, source):
+    data_rundir = os.path.join(outdir, "data", run_tag)
     pattern = os.path.join(data_rundir, f"{source}_fittedR_ep*",
                             f"{source}_fittedR_ep*_summary.csv")
     files = sorted(glob.glob(pattern))
@@ -836,24 +853,53 @@ def make_evolution_plot(outdir, run_tag, source):
             f"No per-epoch summaries found matching {pattern}. "
             f"Run MODE='fitted_R' for each epoch of '{source}' first."
         )
-
     rows = [pd.read_csv(f).iloc[0] for f in files]
     df = pd.DataFrame(rows).sort_values("T").reset_index(drop=True)
 
-    fig, axes = plt.subplots(len(PARAM_LABELS_FITTED_R), 1,
-                              figsize=(7, 2.5 * len(PARAM_LABELS_FITTED_R)),
+    # Unit conversions for display (evolution + density-profile plots only;
+    # corner/trace plots intentionally keep the raw sampler parameterization
+    # -- a, log10R, BG, log10n0 -- unchanged).
+    # 10**x and BG->beta are both monotonic increasing, so transforming the
+    # already-computed percentile columns directly is exact.
+    for stat in ["median", "lo68", "hi68", "best"]:
+        df[f"R_{stat}"]    = 10.0 ** df[f"log10R_{stat}"]
+        df[f"n0_{stat}"]   = 10.0 ** df[f"log10n0_{stat}"]
+        df[f"beta_{stat}"] = _beta_from_BG(df[f"BG_{stat}"])
+
+    return df
+
+
+EVOLUTION_DISPLAY_PARAMS = ["a", "R", "beta", "n0"]
+EVOLUTION_AXIS_INFO = {
+    "a":    (r"$a$",                    False),
+    "R":    (r"$R$ (cm)",               True),
+    "beta": (r"$\beta$",                False),
+    "n0":   (r"$n_0$ (cm$^{-3}$)",      True),
+}
+
+
+def make_evolution_plot(outdir, run_tag, source):
+    plots_rundir = os.path.join(outdir, "plots", run_tag)
+    os.makedirs(plots_rundir, exist_ok=True)
+    df = _load_fitted_R_summaries(outdir, run_tag, source)
+
+    fig, axes = plt.subplots(len(EVOLUTION_DISPLAY_PARAMS), 1,
+                              figsize=(7, 2.5 * len(EVOLUTION_DISPLAY_PARAMS)),
                               sharex=True)
-    for j, (ax, lab) in enumerate(zip(np.atleast_1d(axes), PARAM_LABELS_FITTED_R)):
-        med = df[f"{lab}_median"].values
-        lo  = df[f"{lab}_lo68"].values
-        hi  = df[f"{lab}_hi68"].values
-        best = df[f"{lab}_best"].values
+    for j, (ax, key) in enumerate(zip(np.atleast_1d(axes), EVOLUTION_DISPLAY_PARAMS)):
+        med  = df[f"{key}_median"].values
+        lo   = df[f"{key}_lo68"].values
+        hi   = df[f"{key}_hi68"].values
+        best = df[f"{key}_best"].values
         yerr = np.vstack([med - lo, hi - med])
         ax.errorbar(df["T"], med, yerr=yerr, fmt="o", capsize=4,
                     color="crimson", label="median +/- 68%")
         ax.plot(df["T"], best, "x--", color="steelblue", alpha=0.7,
                 label="Max Likelihood")
-        ax.set_ylabel(pretty_label(lab))
+        label, use_logy = EVOLUTION_AXIS_INFO[key]
+        ax.set_ylabel(label)
+        if use_logy:
+            ax.set_yscale("log")
         if j == 0:
             ax.legend(fontsize=9)
 
@@ -865,7 +911,98 @@ def make_evolution_plot(outdir, run_tag, source):
     fig.savefig(outpath, dpi=130)
     plt.close(fig)
     print(f"    saved -> {outpath}")
+
+    make_density_profile_plot(df, plots_rundir, source)
     return df
+
+
+def make_density_profile_plot(df, plots_rundir, source):
+    """n0 (cm^-3) vs R (cm), points connected in time order (i.e. tracing
+    the shock's actual trajectory through (R, n0) space as it expands) --
+    median +/- 68% in red, Max Likelihood (no error bars) in faint blue,
+    each with its own dashed connecting line."""
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    yerr_med = np.vstack([df["n0_median"] - df["n0_lo68"],
+                          df["n0_hi68"] - df["n0_median"]])
+    ax.errorbar(df["R_median"], df["n0_median"], yerr=yerr_med, fmt="o--",
+                capsize=4, color="crimson", label="median +/- 68%")
+    ax.plot(df["R_best"], df["n0_best"], "x--", color="steelblue", alpha=0.4,
+            label="Max Likelihood")
+
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel(r"$R$ (cm)"); ax.set_ylabel(r"$n_0$ (cm$^{-3}$)")
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    ax.set_title(f"{name} -- Density Profile")
+    ax.legend()
+    fig.tight_layout()
+    outpath = os.path.join(plots_rundir, f"{source}_density_profile.png")
+    fig.savefig(outpath, dpi=130)
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
+
+
+def make_sed_collage(cfg, fixed):
+    """Grid of per-epoch SEDs (data + Max Likelihood fit only, no posterior
+    draw lines), titled with the ACTUAL data time-span/mean of each epoch
+    (not the EPOCH_GROUPS bin edges)."""
+    source = cfg["source"]
+    data_rundir = os.path.join(cfg["outdir"], "data", cfg["run_tag"])
+    plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+    os.makedirs(plots_rundir, exist_ok=True)
+
+    pattern = os.path.join(data_rundir, f"{source}_fittedR_ep*",
+                            f"{source}_fittedR_ep*_summary.csv")
+    files = sorted(glob.glob(pattern),
+                   key=lambda f: int(re.search(r"ep(\d+)_summary", f).group(1)))
+    if not files:
+        raise FileNotFoundError(
+            f"No per-epoch summaries found matching {pattern}. "
+            f"Run MODE='fitted_R' for each epoch of '{source}' first."
+        )
+
+    n = len(files)
+    ncols = min(3, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+                              constrained_layout=True)
+    ax_flat = np.atleast_1d(axes).reshape(-1)
+
+    for k, f in enumerate(files):
+        row = pd.read_csv(f).iloc[0]
+        epoch_idx = int(re.search(r"ep(\d+)_summary", f).group(1))
+        ep = get_epoch_data(source, epoch_idx)
+        theta_best = np.array([row[f"{lab}_best"] for lab in PARAM_LABELS_FITTED_R])
+
+        freq_data, flux_data = ep["freq"], ep["flux"]
+        log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
+        xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
+        nu_grid = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 400)
+        log_ylo, log_yhi = np.log10(flux_data.min()), np.log10(flux_data.max())
+        ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
+
+        ax = ax_flat[k]
+        ax.errorbar(freq_data, flux_data, yerr=ep["eflux"], fmt="o", ms=5,
+                    color="k", zorder=5)
+        Fnu_best = _fnu_fitted_R(theta_best, nu_grid, ep["T"], ep["z"], ep["d_L"],
+                                  fixed, cfg["therm_el"], cfg["pl_el"])
+        ax.plot(nu_grid, Fnu_best, color="crimson", lw=2.2)
+
+        ax.set_xlim(xlim); ax.set_ylim(ylim)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
+                     r"($\langle t\rangle$=" + f"{ep['t_rest_mean']:.1f} d)")
+        ax.set_xlabel(r"$\nu$ (Hz)"); ax.set_ylabel(r"$F_\nu$ (Jy)")
+
+    for k in range(n, len(ax_flat)):
+        ax_flat[k].set_visible(False)
+
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    fig.suptitle(f"{name} -- SED Fits by Epoch")
+    outpath = os.path.join(plots_rundir, f"{source}_sed_collage.png")
+    fig.savefig(outpath, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
 
 
 # =====================================================================
@@ -938,6 +1075,18 @@ def make_knob_plot(cfg):
     ax0.set_xscale("log"); ax0.set_yscale("log")
     ax0.set_title("Baseline (unchanged)")
     ax0.set_xlabel(r"$\nu$ (Hz)"); ax0.set_ylabel(r"$F_\nu$ (Jy)")
+
+    # Legend listing every dial's baseline value -- i.e. exactly what each
+    # of the other 11 panels holds fixed while it varies its own parameter.
+    baseline_handles = [
+        plt.Line2D([], [], color="none",
+                   label=f"{pretty_label(lab)} = {center[lab]:.3g}")
+        for lab in KNOB_ORDER
+    ]
+    ax0.legend(handles=baseline_handles, fontsize=8, ncol=2,
+               loc="upper right", framealpha=0.9,
+               title="Baseline values", title_fontsize=9,
+               handlelength=0, handletextpad=0)
 
     for k, lab in enumerate(KNOB_ORDER):
         ax = ax_flat[k + 1]
@@ -1174,6 +1323,9 @@ def parse_args():
     p.add_argument("--no-resume", dest="resume", action="store_false")
     p.add_argument("--time_only", action="store_true", default=None)
     p.add_argument("--make_evolution_plot", action="store_true", default=None)
+    p.add_argument("--make_sed_collage", action="store_true", default=None,
+                   help="grid of per-epoch SEDs (data + Max Likelihood only) "
+                        "for a source; use with --source/--dir")
     p.add_argument("--replot", action="store_true", default=None,
                    help="regenerate plots from an existing saved chain "
                         "(no resampling); use with --source/--mode/--epoch/--dir "
@@ -1211,6 +1363,7 @@ def build_config():
         resume      = _resolve(cli.resume, RESUME),
         time_only   = _resolve(cli.time_only, TIME_ONLY),
         make_evolution_plot = _resolve(cli.make_evolution_plot, MAKE_EVOLUTION_PLOT),
+        make_sed_collage = _resolve(cli.make_sed_collage, MAKE_SED_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
         make_knob_plot = _resolve(cli.make_knob_plot, MAKE_KNOB_PLOT),
         knob_source = _resolve(cli.knob_source, KNOB_SOURCE),
@@ -1234,6 +1387,10 @@ def main():
 
     if cfg["make_evolution_plot"]:
         make_evolution_plot(cfg["outdir"], cfg["run_tag"], cfg["source"])
+        return
+
+    if cfg["make_sed_collage"]:
+        make_sed_collage(cfg, fixed)
         return
 
     if cfg["make_knob_plot"]:
@@ -1269,3 +1426,71 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# =====================================================================
+# CHEAT SHEET -- every command below is safe to copy/paste. Swap
+# --source wpp <-> dbl and --dir to match whatever you actually used.
+# Nothing below this line executes; it's here so you don't have to
+# remember the flags.
+# =====================================================================
+#
+# --- 0. ALWAYS DO THIS FIRST for any new config before a real run ---
+# python runSampler.py --time_only --mode fitted_R --source wpp --epoch 1 \
+#     --nwalkers 24 --nsamples 1e5
+# python runSampler.py --time_only --mode dynamical --source wpp \
+#     --nwalkers 24 --nsamples 1e5
+#
+# --- 1. RUN A FIT ---
+# # single epoch, fitted_R (independent per-epoch fit: a, log10R, BG, log10n0)
+# python runSampler.py --mode fitted_R --source wpp --epoch 3 \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#
+# # every epoch of a source in one local call (fitted_R only; on SLURM,
+# # submit one array task per epoch instead -- see run_fitted_R.slurm)
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#
+# # dynamical (joint fit across ALL epochs of one source at once -- no
+# # --epoch needed/used; much slower than fitted_R, time_only it first)
+# python runSampler.py --mode dynamical --source wpp \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#
+# # resume a run that got cut off (same nwalkers/dir as the original)
+# python runSampler.py --mode fitted_R --source wpp --epoch 3 \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp --resume
+#
+# --- 2. REPLOT (regenerate corner/trace/SED from an existing chain --
+#     no resampling; use after tweaking plot formatting, not physics) ---
+# python runSampler.py --replot --mode fitted_R --source wpp --epoch all \
+#     --dir run1_wpp
+# python runSampler.py --replot --mode dynamical --source wpp --dir run1_wpp
+#
+# --- 3. PARAMETER EVOLUTION + DENSITY PROFILE (needs all epochs of a
+#     source already fit in fitted_R mode; both plots come from one call) ---
+# python runSampler.py --make_evolution_plot --source wpp --dir run1_wpp
+# python runSampler.py --make_evolution_plot --source dbl --dir run1_dbl
+#
+# --- 4. SED COLLAGE (grid of per-epoch data + Max Likelihood fit only;
+#     needs all epochs of a source already fit in fitted_R mode) ---
+# python runSampler.py --make_sed_collage --source wpp --dir run1_wpp
+# python runSampler.py --make_sed_collage --source dbl --dir run1_dbl
+#
+# --- 5. KNOB/DIALS PLOT (SED sensitivity to each of the 11 params;
+#     doesn't need any prior fit to exist) ---
+# # centered on prior midpoints
+# python runSampler.py --make_knob_plot --knob_source wpp --dir run1_wpp
+#
+# # centered on a real epoch's actual best fit (also uses that epoch's T)
+# python runSampler.py --make_knob_plot --knob_source wpp --dir run1_wpp \
+#     --knob_from_summary mcmc_output/data/run1_wpp/wpp_fittedR_ep3/wpp_fittedR_ep3_summary.csv
+#
+# --- WHERE THINGS LAND ---
+# mcmc_output/
+# +-- data/<dir>/<tag>/          chain.h5, flatMCMC.csv, summary.csv (gitignore this)
+# +-- plots/<dir>/<tag>/         trace.png, corner.png, sed.png, config.txt
+# +-- plots/<dir>/               param_evolution.png, density_profile.png,
+#                                 sed_collage.png, knob_plot_<source>.png
+#                                 (these last ones live one level up from
+#                                 per-epoch <tag> folders -- they're per-
+#                                 source/run, not per-epoch)
