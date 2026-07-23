@@ -1117,7 +1117,13 @@ def make_sed_collage(cfg, fixed):
         elif mismatches:
             print(f"    {tag}: MISMATCH vs saved config -- " + "; ".join(mismatches))
 
-        freq_data, flux_data = ep["freq"], ep["flux"]
+        freq_data = ep["freq"]
+        # Convert Jy -> specific luminosity (erg/s/Hz): L_nu = 4*pi*d_L^2 *
+        # F_nu_cgs, and F_nu_cgs = F_nu_Jy * C.Jy (C.Jy = 1e-23 erg/s/cm^2/Hz).
+        Lnu_conv = 4.0 * np.pi * ep["d_L"] ** 2 * C.Jy
+        flux_data = ep["flux"] * Lnu_conv
+        eflux_data = ep["eflux"] * Lnu_conv
+
         log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
         xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
         nu_grid = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 400)
@@ -1125,18 +1131,20 @@ def make_sed_collage(cfg, fixed):
         ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
 
         ax = ax_flat[k]
-        ax.errorbar(freq_data, flux_data, yerr=ep["eflux"], fmt="o", ms=5,
+        ax.errorbar(freq_data, flux_data, yerr=eflux_data, fmt="o", ms=5,
                     color="k", zorder=5)
         Fnu_best = _fnu_fitted_R(theta_best, free_labels, nu_grid, ep["T"],
                                   ep["z"], ep["d_L"], fixed,
                                   cfg["therm_el"], cfg["pl_el"])
-        ax.plot(nu_grid, Fnu_best, color="crimson", lw=2.2)
+        Lnu_best = Fnu_best * Lnu_conv
+        ax.plot(nu_grid, Lnu_best, color="crimson", lw=2.2)
 
         ax.set_xlim(xlim); ax.set_ylim(ylim)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
                      r"($\langle t\rangle$=" + f"{ep['t_rest_mean']:.1f} d)")
-        ax.set_xlabel(r"$\nu$ (Hz)"); ax.set_ylabel(r"$F_\nu$ (Jy)")
+        ax.set_xlabel(r"$\nu$ (Hz)")
+        ax.set_ylabel(r"$L_\nu$ (ergs s$^{-1}$ Hz$^{-1}$)")
 
     for k in range(n, len(ax_flat)):
         ax_flat[k].set_visible(False)
