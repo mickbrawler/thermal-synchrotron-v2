@@ -1,0 +1,11 @@
+
+=== [fitted_R] wpp epoch 3 ===
+    walker init batch 1: 24/24 valid
+    converged early at iteration 68900 (tau=[ 461.3302795   852.70640594 1340.64069232  608.1362593  1377.50014844])
+    autocorr time: [ 461.3302795   852.70640594 1340.64069232  608.1362593  1377.50014844] -> discard=4132, thin=688
+    [wpp_fittedR_ep3] posterior summary:
+      a: 3.948  (+0.0373 / -0.0975)  best=3.998
+      log10R: 16.63  (+0.0779 / -0.0615)  best=16.64
+      BG: 0.6584  (+0.146 / -0.103)  best=0.5639
+      log10n0: 2.105  (+0.4 / -0.478)  best=2.072
+      log10eps_B: -1.74  (+0.863 / -0.905)  best=-1.177

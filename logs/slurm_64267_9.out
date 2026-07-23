@@ -1,0 +1,10 @@
+
+=== [fitted_R] dbl epoch 3 ===
+    walker init batch 1: 24/24 valid
+    converged early at iteration 25700 (tau=[318.13584349 513.16638789 479.75852265 485.36539585])
+    autocorr time: [318.13584349 513.16638789 479.75852265 485.36539585] -> discard=1539, thin=256
+    [dbl_fittedR_ep3] posterior summary:
+      a: 3.951  (+0.0375 / -0.985)  best=0.5861
+      log10R: 16.39  (+0.0935 / -0.0709)  best=16.78
+      BG: 0.5766  (+0.138 / -0.106)  best=0.2848
+      log10n0: 3.062  (+0.329 / -0.397)  best=3.891

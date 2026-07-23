@@ -1,0 +1,22 @@
+Configuration for wpp_fittedR_ep1
+==============================
+
+Fixed (non-fit) parameters:
+  s        = 100000.0
+  delta    = 1.0
+  eps_e    = 0.01
+  eps_T    = 0.4
+  p        = 3.0
+  mu_u     = 0.62
+  mu_e     = 1.18
+  k        = 0.0
+  eps_B    = 0.1
+
+therm_el = True
+pl_el    = True
+
+Free parameters (uniform priors):
+  a            : (0.5, 4.0)
+  log10R       : (14.0, 18.0)
+  BG           : (0.01, 2.1)
+  log10n0      : (-2.0, 6.0)

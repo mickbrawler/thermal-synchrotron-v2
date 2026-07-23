@@ -1,0 +1,11 @@
+
+=== [fitted_R] dbl epoch 2 ===
+    walker init batch 1: 24/24 valid
+    WARNING: autocorr time unreliable (The chain is shorter than 50 times the integrated autocorrelation time for 2 parameter(s). Use this estimate with caution and run a longer chain!
+N/50 = 2000;
+tau: [2479.95979702 1745.99398767 1271.94119988 2596.90999834]); falling back to 20% burn-in, thin=1. Consider more steps.
+    [dbl_fittedR_ep2] posterior summary:
+      a: 3.903  (+0.0719 / -0.766)  best=0.5244
+      log10R: 16.23  (+0.0885 / -0.078)  best=16.2
+      BG: 0.5608  (+0.181 / -0.11)  best=0.7651
+      log10n0: 3.611  (+0.388 / -0.611)  best=2.861
