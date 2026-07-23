@@ -332,6 +332,50 @@ def natural_xy_limits(nu_grid, curves, freq_data=None, flux_data=None,
     return xlim, ylim
 
 
+def parse_config_txt_fixed(path):
+    """Parse the 'Fixed (non-fit) parameters:' section of a saved
+    *_config.txt back into a {name: float} dict, so callers can check for
+    an actual mismatch against currently-passed FIXED_PARAMS/CLI overrides
+    rather than just printing a generic 'go check this yourself' note."""
+    fixed = {}
+    in_section = False
+    with open(path) as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped == "Fixed (non-fit) parameters:":
+                in_section = True
+                continue
+            if in_section:
+                if not stripped or stripped.startswith(("therm_el", "pl_el")):
+                    break
+                if "=" in stripped:
+                    k, v = stripped.split("=", 1)
+                    try:
+                        fixed[k.strip()] = float(v.strip())
+                    except ValueError:
+                        pass
+    return fixed
+
+
+def check_fixed_params_match(config_path, current_fixed, tol=1e-8):
+    """Compare a saved run's actual fixed params (from its *_config.txt)
+    against what's currently passed in. Returns a list of human-readable
+    mismatch strings (empty if everything matches or the file is missing/
+    unparseable, since in that case there's nothing to compare against)."""
+    if not os.path.exists(config_path):
+        return None  # can't verify -- caller should say so explicitly
+    try:
+        saved = parse_config_txt_fixed(config_path)
+    except Exception:
+        return None
+    mismatches = []
+    for k, saved_v in saved.items():
+        cur_v = current_fixed.get(k)
+        if cur_v is None or abs(cur_v - saved_v) > tol * max(1.0, abs(saved_v)):
+            mismatches.append(f"{k}: run used {saved_v}, currently passing {cur_v}")
+    return mismatches
+
+
 def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
                         free_labels=None):
     free_keys = set()
@@ -1053,13 +1097,10 @@ def make_sed_collage(cfg, fixed):
                               constrained_layout=True)
     ax_flat = np.atleast_1d(axes).reshape(-1)
 
-    print(f"    NOTE: SED curves are reconstructed using CURRENT FIXED_PARAMS "
-          f"for whatever wasn't free in each epoch's fit -- compare against "
-          f"that epoch's *_config.txt if unsure it matches.")
-
     for k, f in enumerate(files):
         row = pd.read_csv(f).iloc[0]
         epoch_idx = int(re.search(r"ep(\d+)_summary", f).group(1))
+        tag = f"{source}_fittedR_ep{epoch_idx}"
         ep = get_epoch_data(source, epoch_idx)
         # auto-discover which params were actually free for THIS epoch's
         # run, straight from its saved summary columns -- more robust than
@@ -1067,6 +1108,14 @@ def make_sed_collage(cfg, fixed):
         best_cols = [c for c in row.index if c.endswith("_best")]
         free_labels = [c[:-len("_best")] for c in best_cols]
         theta_best = np.array([row[c] for c in best_cols])
+
+        config_path = os.path.join(plots_rundir, tag, f"{tag}_config.txt")
+        mismatches = check_fixed_params_match(config_path, fixed)
+        if mismatches is None:
+            print(f"    {tag}: no saved config found to verify against -- "
+                  f"can't confirm FIXED_PARAMS matches what this epoch actually used.")
+        elif mismatches:
+            print(f"    {tag}: MISMATCH vs saved config -- " + "; ".join(mismatches))
 
         freq_data, flux_data = ep["freq"], ep["flux"]
         log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
@@ -1365,21 +1414,27 @@ def replot_fitted_R(source, epoch_idx, cfg, fixed):
     labels = [c[:-len("_best")] for c in summary_row.index if c.endswith("_best")]
 
     old_config = os.path.join(plots_dir, f"{tag}_config.txt")
-    if os.path.exists(old_config):
-        print(f"    NOTE: {old_config} exists from the original run -- "
-              f"compare it to current FIXED_PARAMS before trusting the SED panel.")
+    mismatches = check_fixed_params_match(old_config, fixed)
+    if mismatches is None:
+        print(f"    {tag}: no saved config found to verify against -- using "
+              f"CURRENT FIXED_PARAMS for whatever wasn't free (free params "
+              f"recovered from this run's own summary.csv: {labels})")
+        write_config = True
+    elif mismatches:
+        print(f"    {tag}: MISMATCH vs saved config -- " + "; ".join(mismatches))
+        print(f"    NOT overwriting the saved config.txt (it's still correct); "
+              f"the SED panel below uses your CURRENT mismatched values -- "
+              f"fix the override and rerun to get a correct SED.")
+        write_config = False
     else:
-        print(f"    NOTE: no saved config for {tag} (pre-dates that feature) -- "
-              f"using CURRENT FIXED_PARAMS to draw the SED for whatever "
-              f"wasn't free (free params themselves were recovered from "
-              f"this run's own summary.csv: {labels}); verify FIXED_PARAMS "
-              f"matches what was actually used for this run.")
+        write_config = True
 
     backend = HDFBackend(backend_path)
     ep = get_epoch_data(source, epoch_idx)
 
-    save_run_config_txt(plots_dir, tag, fixed, cfg["priors_fitted_R"],
-                        cfg["therm_el"], cfg["pl_el"], free_labels=labels)
+    if write_config:
+        save_run_config_txt(plots_dir, tag, fixed, cfg["priors_fitted_R"],
+                            cfg["therm_el"], cfg["pl_el"], free_labels=labels)
     flat, flat_lp, _ = save_chain_outputs(data_dir, plots_dir, tag, title_str,
                                           backend, labels, T=ep["T"])
     plot_sed_fitted_R(plots_dir, tag, title_str, ep, flat, flat_lp, fixed,
@@ -1400,19 +1455,26 @@ def replot_dynamical(source, cfg, fixed):
     os.makedirs(plots_dir, exist_ok=True)
 
     old_config = os.path.join(plots_dir, f"{tag}_config.txt")
-    if os.path.exists(old_config):
-        print(f"    NOTE: {old_config} exists from the original run -- "
-              f"compare it to current FIXED_PARAMS before trusting the SED panels.")
+    mismatches = check_fixed_params_match(old_config, fixed)
+    if mismatches is None:
+        print(f"    {tag}: no saved config found to verify against -- "
+              f"using CURRENT FIXED_PARAMS/priors to draw the SEDs.")
+        write_config = True
+    elif mismatches:
+        print(f"    {tag}: MISMATCH vs saved config -- " + "; ".join(mismatches))
+        print(f"    NOT overwriting the saved config.txt (it's still correct); "
+              f"the SED panels below use your CURRENT mismatched values -- "
+              f"fix the override and rerun to get correct SEDs.")
+        write_config = False
     else:
-        print(f"    NOTE: no saved config for {tag} (pre-dates that feature) -- "
-              f"using CURRENT FIXED_PARAMS/priors to draw the SEDs; verify "
-              f"these match what was actually used for this run.")
+        write_config = True
 
     backend = HDFBackend(backend_path)
     epochs = get_all_epochs(source)
 
-    save_run_config_txt(plots_dir, tag, fixed, PRIORS_DYNAMICAL,
-                        cfg["therm_el"], cfg["pl_el"])
+    if write_config:
+        save_run_config_txt(plots_dir, tag, fixed, PRIORS_DYNAMICAL,
+                            cfg["therm_el"], cfg["pl_el"])
     flat, flat_lp, _ = save_chain_outputs(data_dir, plots_dir, tag, title_str,
                                           backend, PARAM_LABELS_DYNAMICAL)
     plot_sed_dynamical(plots_dir, tag, title_str, epochs, flat, flat_lp, fixed,
@@ -1589,12 +1651,22 @@ if __name__ == "__main__":
 
 # =====================================================================
 # CHEAT SHEET -- every command below is safe to copy/paste. Swap
-# --source wpp <-> dbl and --dir to match whatever you actually used.
+# --source wpp <-> dbl to match. --dir is a shared per-CONFIG label, not
+# per-source: run2.slurm/run3.slurm/etc. all write BOTH sources under the
+# same --dir (e.g. everything from run2.slurm lands under .../run2/,
+# distinguished by the source name already baked into each file's own
+# name, like wpp_fittedR_ep1_chain.h5 vs dbl_fittedR_ep1_chain.h5). So use
+# --dir run2 (not run2_wpp) for wpp AND for dbl below.
 # Nothing below this line executes; it's here so you don't have to
 # remember the flags.
 # =====================================================================
 #
 # --- 0. ALWAYS DO THIS FIRST for any new config before a real run ---
+# NOTE: the printed estimate is SERIAL-equivalent (one likelihood eval,
+# no multiprocessing) x nwalkers x nsamples -- your actual wall-clock time
+# will be well under this since the pool evaluates all nwalkers each step
+# in parallel. Useful for comparing configs against each other, not as a
+# literal ETA.
 # python runSampler.py --time_only --mode fitted_R --source wpp --epoch 1 \
 #     --nwalkers 24 --nsamples 1e5
 # python runSampler.py --time_only --mode dynamical --source wpp \
@@ -1603,7 +1675,12 @@ if __name__ == "__main__":
 # --- 1. RUN A FIT ---
 # # single epoch, fitted_R (independent per-epoch fit: a, log10R, BG, log10n0)
 # python runSampler.py --mode fitted_R --source wpp --epoch 3 \
-#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run2
+#
+# # every epoch of a source in one local call (fitted_R only; on SLURM,
+# # submit one array task per epoch instead -- see run2.slurm/run3.slurm/...)
+# python runSampler.py --mode fitted_R --source wpp --epoch all \
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run2
 #
 # --- 1b. DIFFERENT FIXED-PARAM / FREE-PARAM CONFIGS (run2, run3, ...) --
 #     without editing FIXED_PARAMS/FREE_PARAMS_FITTED_R in the file ---
@@ -1627,46 +1704,42 @@ if __name__ == "__main__":
 #     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run5 \
 #     --free_params a,log10R,BG,log10n0,log10eps_B --eps_e 0.01
 #
-# (repeat all of the above with --source dbl and its own --dir too)
-#
-# # every epoch of a source in one local call (fitted_R only; on SLURM,
-# # submit one array task per epoch instead -- see run_fitted_R.slurm)
-# python runSampler.py --mode fitted_R --source wpp --epoch all \
-#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+# (repeat all of the above with --source dbl, SAME --dir as the wpp run
+# for that config -- e.g. --source dbl --dir run2, not run2_dbl)
 #
 # # dynamical (joint fit across ALL epochs of one source at once -- no
 # # --epoch needed/used; much slower than fitted_R, time_only it first)
 # python runSampler.py --mode dynamical --source wpp \
-#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run2
 #
 # # resume a run that got cut off (same nwalkers/dir as the original)
 # python runSampler.py --mode fitted_R --source wpp --epoch 3 \
-#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run1_wpp --resume
+#     --nwalkers 24 --nsamples 1e5 --ncores 12 --dir run2 --resume
 #
 # --- 2. REPLOT (regenerate corner/trace/SED from an existing chain --
 #     no resampling; use after tweaking plot formatting, not physics) ---
 # python runSampler.py --replot --mode fitted_R --source wpp --epoch all \
-#     --dir run1_wpp
-# python runSampler.py --replot --mode dynamical --source wpp --dir run1_wpp
+#     --dir run2
+# python runSampler.py --replot --mode dynamical --source wpp --dir run2
 #
 # --- 3. PARAMETER EVOLUTION + DENSITY PROFILE (needs all epochs of a
 #     source already fit in fitted_R mode; both plots come from one call) ---
-# python runSampler.py --make_evolution_plot --source wpp --dir run1_wpp
-# python runSampler.py --make_evolution_plot --source dbl --dir run1_dbl
+# python runSampler.py --make_evolution_plot --source wpp --dir run2
+# python runSampler.py --make_evolution_plot --source dbl --dir run2
 #
 # --- 4. SED COLLAGE (grid of per-epoch data + Max Likelihood fit only;
 #     needs all epochs of a source already fit in fitted_R mode) ---
-# python runSampler.py --make_sed_collage --source wpp --dir run1_wpp
-# python runSampler.py --make_sed_collage --source dbl --dir run1_dbl
+# python runSampler.py --make_sed_collage --source wpp --dir run2
+# python runSampler.py --make_sed_collage --source dbl --dir run2
 #
 # --- 5. KNOB/DIALS PLOT (SED sensitivity to each of the 11 params;
 #     doesn't need any prior fit to exist) ---
 # # centered on prior midpoints
-# python runSampler.py --make_knob_plot --knob_source wpp --dir run1_wpp
+# python runSampler.py --make_knob_plot --knob_source wpp --dir run2
 #
 # # centered on a real epoch's actual best fit (also uses that epoch's T)
-# python runSampler.py --make_knob_plot --knob_source wpp --dir run1_wpp \
-#     --knob_from_summary mcmc_output/data/run1_wpp/wpp_fittedR_ep3/wpp_fittedR_ep3_summary.csv
+# python runSampler.py --make_knob_plot --knob_source wpp --dir run2 \
+#     --knob_from_summary mcmc_output/data/run2/wpp_fittedR_ep3/wpp_fittedR_ep3_summary.csv
 #
 # --- WHERE THINGS LAND ---
 # mcmc_output/
