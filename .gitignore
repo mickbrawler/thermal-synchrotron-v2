@@ -1,2 +1,4 @@
 oldTests/
 mcmc_output/data
+mcmc_output/.DS_Store
+mcmc_output/plots/.DS_Store
