@@ -1410,6 +1410,7 @@ def make_slope_collage(cfg):
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
                               constrained_layout=True)
     ax_flat = np.atleast_1d(axes).reshape(-1)
+    epoch_slopes = {}  # epoch_idx -> array of slopes, for the summary printed at the end
 
     for k in range(n_epochs):
         epoch_idx = k + 1
@@ -1424,6 +1425,7 @@ def make_slope_collage(cfg):
             ax.set_xscale("log")
             ax.text(0.5, 0.5, "< 2 points\n(no slope)", ha="center", va="center",
                     transform=ax.transAxes, color="0.5")
+            epoch_slopes[epoch_idx] = np.array([])
         else:
             log_nu = np.log(freq_s)
             log_F = np.log(np.abs(flux_s))
@@ -1435,6 +1437,7 @@ def make_slope_collage(cfg):
             ax.plot(nu_mid, slopes, "o-", color="crimson", lw=1.5, ms=5)
             ax.axhline(0, color="0.75", lw=0.8, ls=":")
             ax.set_xscale("log")
+            epoch_slopes[epoch_idx] = slopes
 
         ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
                      r"($\langle t\rangle$=" + f"{ep['t_rest_mean']:.1f} d)")
@@ -1450,6 +1453,17 @@ def make_slope_collage(cfg):
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"    saved -> {outpath}")
+
+    # Written to a file (not printed) -- lives alongside the collage png
+    # in this run's plots folder, e.g. mcmc_output/plots/run1/
+    slopes_path = os.path.join(plots_rundir, f"{source}_slopes.txt")
+    lines = [f"{name} slopes by epoch", "=" * (len(name) + 16), ""]
+    for epoch_idx, slopes in epoch_slopes.items():
+        slopes_str = ", ".join(f"{s:.3f}" for s in slopes) if len(slopes) else "(< 2 points, no slope)"
+        lines.append(f"epoch {epoch_idx}: {slopes_str}")
+    with open(slopes_path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"    saved -> {slopes_path}")
 
 
 # =====================================================================
