@@ -180,6 +180,7 @@ MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
 MAKE_SED_COLLAGE     = False
 MAKE_SLOPE_COLLAGE   = False
+MAKE_HIGHFREQ_COLLAGE = False
 REPLOT               = False
 
 # --- "turning knobs" SED sensitivity plot (fitted_R model only) ---
@@ -462,6 +463,15 @@ VLA_NONDET_PROMOTE_EPOCHS = {6}
 
 # --- non-detections to drop entirely -- not in the fit, never plotted ----
 VLA_NONDET_IGNORE_EPOCHS = {5}
+
+# --- per-epoch high-frequency cutoff (Hz) for the high-freq linear-fit
+# collage: only points ABOVE this frequency get included in that epoch's
+# linear fit (in log-log space) -- used to isolate the optically-thin
+# spectral slope where it's cleanly sampled. ---
+HIGH_FREQ_THRESHOLD_HZ = {
+    "wpp": {1: 1.5e11, 2: 1.5e11, 3: 1.5e11, 4: 3e10, 5: 5e9, 6: 1.3e10},
+    "dbl": {1: 1.5e11, 2: 1.5e11, 3: 1.5e11},
+}
 
 
 def _load_wpp_raw():
@@ -1466,6 +1476,143 @@ def make_slope_collage(cfg):
     print(f"    saved -> {slopes_path}")
 
 
+def make_highfreq_fit_collage(cfg):
+    """Grid of per-epoch SEDs (all data points + non-detections for
+    context) with a linear fit (in log-log space) overlaid as a dashed
+    line, using ONLY the points above that epoch's HIGH_FREQ_THRESHOLD_HZ
+    cutoff -- isolates the optically-thin spectral slope where it's
+    cleanly sampled. A vertical line marks the cutoff itself. Legend on
+    the fit line is just 'm=...' / 'p=...' (m = fitted slope,
+    p = -2m+1 = the implied power-law electron index). Pure data
+    diagnostic -- no fit/model needed, reads straight from get_epoch_data()."""
+    source = cfg["source"]
+    plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+    os.makedirs(plots_rundir, exist_ok=True)
+
+    thresholds = HIGH_FREQ_THRESHOLD_HZ.get(source)
+    if not thresholds:
+        raise ValueError(f"No HIGH_FREQ_THRESHOLD_HZ entries defined for source '{source}'")
+
+    epochs = sorted(thresholds.keys())
+    n = len(epochs)
+    ncols = min(3, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+                              constrained_layout=True)
+    ax_flat = np.atleast_1d(axes).reshape(-1)
+
+    for k, epoch_idx in enumerate(epochs):
+        ep = get_epoch_data(source, epoch_idx)
+        ax = ax_flat[k]
+        threshold = thresholds[epoch_idx]
+
+        if len(ep["freq"]) == 0 and len(ep["freq_nondet"]) == 0:
+            ax.set_xscale("log")
+            ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                    transform=ax.transAxes, color="0.5")
+            ax.set_title(f"epoch {epoch_idx}")
+            continue
+
+        Lnu_conv = 4.0 * np.pi * ep["d_L"] ** 2 * C.Jy
+        freq_data = ep["freq"]
+        flux_data = ep["flux"] * Lnu_conv
+        eflux_data = ep["eflux"] * Lnu_conv
+        is_ul = ep["is_upper_limit"]
+        freq_nondet = ep["freq_nondet"]
+        upper_limit_nondet = ep["upper_limit_nondet"] * Lnu_conv
+
+        above = freq_data > threshold
+        # points used in the fit: solid black. points not used: open/gray.
+        ax.errorbar(freq_data[above & ~is_ul], flux_data[above & ~is_ul],
+                    yerr=eflux_data[above & ~is_ul], fmt="o", ms=5,
+                    color="k", zorder=5)
+        ax.errorbar(freq_data[~above & ~is_ul], flux_data[~above & ~is_ul],
+                    yerr=eflux_data[~above & ~is_ul], fmt="o", ms=5,
+                    mfc="none", mec="k", ecolor="0.6", zorder=4)
+        if len(freq_promoted := freq_data[is_ul]):
+            ax.scatter(freq_promoted, flux_data[is_ul], marker="v", s=45,
+                       color="k", alpha=0.35, zorder=4)
+        if len(freq_nondet):
+            ax.scatter(freq_nondet, upper_limit_nondet, marker="v", s=45,
+                       color="k", alpha=0.35, zorder=4)
+
+        all_freq = np.concatenate([freq_data, freq_nondet]) if len(freq_nondet) else freq_data
+        all_flux = np.concatenate([flux_data, upper_limit_nondet]) if len(freq_nondet) else flux_data
+        log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
+        xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
+        log_ylo, log_yhi = np.log10(all_flux.min()), np.log10(all_flux.max())
+        ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
+
+        n_fit_pts = int(np.sum(above & ~is_ul))
+        if n_fit_pts >= 2:
+            fit_freq = freq_data[above & ~is_ul]
+            fit_flux = flux_data[above & ~is_ul]
+            log_nu = np.log10(fit_freq)
+            log_F = np.log10(fit_flux)
+            m, b = np.polyfit(log_nu, log_F, 1)
+            p = -2.0 * m + 1.0
+
+            nu_lo = 10 ** (np.log10(fit_freq.min()) - SED_PAD_DEX)
+            nu_hi = 10 ** (np.log10(fit_freq.max()) + SED_PAD_DEX)
+            nu_line = np.logspace(np.log10(nu_lo), np.log10(nu_hi), 50)
+            F_line = 10 ** (m * np.log10(nu_line) + b)
+            ax.plot(nu_line, F_line, color="crimson", ls="--", lw=2.0,
+                    label=f"m={m:.2f}\np={p:.2f}")
+
+            # Two-point secant slope: uses ONLY the first and last (by
+            # frequency) points among the above-threshold subset, not a
+            # full regression across all of them -- a simple derivative
+            # estimate, plotted separately from the polyfit line above.
+            fit_order = np.argsort(fit_freq)
+            nu_1, nu_2 = fit_freq[fit_order[0]], fit_freq[fit_order[-1]]
+            F_1, F_2 = fit_flux[fit_order[0]], fit_flux[fit_order[-1]]
+            m_deriv = (np.log10(F_2) - np.log10(F_1)) / (np.log10(nu_2) - np.log10(nu_1))
+            p_deriv = -2.0 * m_deriv + 1.0
+            ax.plot([nu_1, nu_2], [F_1, F_2], color="steelblue", ls=":", lw=2.0,
+                    marker="o", ms=5,
+                    label=f"m_deriv={m_deriv:.2f}\np_deriv={p_deriv:.2f}")
+
+            # Average of the individual point-to-point slopes within the
+            # above-threshold subset (same method as make_slope_collage,
+            # just restricted to this subset) -- a scalar summary, not a
+            # single well-defined line, so it gets a legend-only proxy
+            # handle (no line drawn for it).
+            freq_sorted = fit_freq[fit_order]
+            flux_sorted = fit_flux[fit_order]
+            pointwise_slopes = np.diff(np.log10(flux_sorted)) / np.diff(np.log10(freq_sorted))
+            m_avg = np.mean(pointwise_slopes)
+            p_avg = -2.0 * m_avg + 1.0
+            avg_handle = plt.Line2D([], [], color="none",
+                                    label=f"m_avg={m_avg:.2f}\np_avg={p_avg:.2f}")
+
+            handles, labels = ax.get_legend_handles_labels()
+            handles.append(avg_handle)
+            labels.append(avg_handle.get_label())
+            ax.legend(handles=handles, labels=labels, fontsize=9, loc="best")
+        else:
+            ax.text(0.97, 0.97, "< 2 points\nabove cutoff", ha="right", va="top",
+                    transform=ax.transAxes, fontsize=8, color="0.5")
+
+        ax.axvline(threshold, color="0.5", lw=1.2, alpha=0.8)
+
+        ax.set_xlim(xlim); ax.set_ylim(ylim)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
+                     r"($\langle t\rangle$=" + f"{ep['t_rest_mean']:.1f} d)")
+        ax.set_xlabel(r"$\nu$ (Hz)")
+        ax.set_ylabel(r"$L_\nu$ (ergs s$^{-1}$ Hz$^{-1}$)")
+
+    for k in range(n, len(ax_flat)):
+        ax_flat[k].set_visible(False)
+
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    fig.suptitle(f"{name} -- High-Frequency Linear Fit by Epoch")
+    outpath = os.path.join(plots_rundir, f"{source}_highfreq_fit_collage.png")
+    fig.savefig(outpath, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
+
+
 # =====================================================================
 # "TURNING KNOBS" SED SENSITIVITY COLLAGE
 # =====================================================================
@@ -1838,6 +1985,11 @@ def parse_args():
                    help="grid of per-epoch slope-vs-frequency (discrete slopes "
                         "between consecutive SED data points); use with "
                         "--source/--dir, no fit required")
+    p.add_argument("--make_highfreq_collage", action="store_true", default=None,
+                   help="grid of per-epoch SEDs with a linear fit (log-log) "
+                        "overlaid using only points above that epoch's "
+                        "HIGH_FREQ_THRESHOLD_HZ cutoff; use with --source/--dir, "
+                        "no MCMC fit required")
     p.add_argument("--replot", action="store_true", default=None,
                    help="regenerate plots from an existing saved chain "
                         "(no resampling); use with --source/--mode/--epoch/--dir "
@@ -1915,6 +2067,7 @@ def build_config():
         make_evolution_plot = _resolve(cli.make_evolution_plot, MAKE_EVOLUTION_PLOT),
         make_sed_collage = _resolve(cli.make_sed_collage, MAKE_SED_COLLAGE),
         make_slope_collage = _resolve(cli.make_slope_collage, MAKE_SLOPE_COLLAGE),
+        make_highfreq_collage = _resolve(cli.make_highfreq_collage, MAKE_HIGHFREQ_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
         make_knob_plot = _resolve(cli.make_knob_plot, MAKE_KNOB_PLOT),
         knob_source = _resolve(cli.knob_source, KNOB_SOURCE),
@@ -1950,6 +2103,10 @@ def main():
 
     if cfg["make_slope_collage"]:
         make_slope_collage(cfg)
+        return
+
+    if cfg["make_highfreq_collage"]:
+        make_highfreq_fit_collage(cfg)
         return
 
     if cfg["make_knob_plot"]:
