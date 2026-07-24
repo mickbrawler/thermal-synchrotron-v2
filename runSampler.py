@@ -1165,20 +1165,15 @@ def make_sed_collage(cfg, fixed):
         Lnu_best = Fnu_best * Lnu_conv
         ax.plot(nu_grid, Lnu_best, color="crimson", lw=2.2)
 
-        # Local spectral index lambda = d ln(Lnu)/d ln(nu), evaluated at the
-        # data's own lowest/highest frequency (the edges actually
-        # constrained by observations) -- log-log derivative, so identical
-        # whether computed on Lnu or Fnu. Generally the low-nu value
-        # reflects optically-thick behavior and the high-nu value
-        # optically-thin, but only if the true SSA peak actually falls
-        # within this epoch's observed band -- otherwise both edges may
-        # sit on the same side of the peak, so these are reported neutrally
-        # as "low-nu"/"high-nu" rather than assumed thick/thin labels.
-        lognu_grid, lam_grid = dlnF_dlnnu(Lnu_best, nu_grid)
-        lam_lo = np.interp(np.log(freq_data.min()), lognu_grid, lam_grid)
-        lam_hi = np.interp(np.log(freq_data.max()), lognu_grid, lam_grid)
-        ax.text(0.03, 0.03,
-                f"$\\lambda_{{low}}$={lam_lo:.2f}\n$\\lambda_{{high}}$={lam_hi:.2f}",
+        # Local spectral index Lambda = d ln(Lnu)/d ln(nu) across the curve.
+        # The optically-thick slope is the steepest positive part of the
+        # SED (below the SSA turnover), so taking the max over the whole
+        # curve picks that out directly, regardless of exactly where the
+        # turnover falls relative to the observed band. Log-log derivative,
+        # so identical whether computed on Lnu or Fnu.
+        _, lam_grid = dlnF_dlnnu(Lnu_best, nu_grid)
+        Lambda_max = np.max(lam_grid)
+        ax.text(0.03, 0.03, f"$\\Lambda$={Lambda_max:.2f}",
                 transform=ax.transAxes, fontsize=9, va="bottom", ha="left",
                 bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
 
