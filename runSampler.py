@@ -439,8 +439,32 @@ def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
 # DATA LOADING
 # =====================================================================
 
+# --- epoch-specific ALMA subband -> full-band swaps -----------------------
+# Per-subband S/N was too sparse at these approximate frequencies (GHz) in
+# these epochs to be worth using subbanded; use the corresponding full-band
+# point(s) from wppALMA.txt instead. Matching is by epoch time-window +
+# frequency within ALMA_SUBBAND_EXCLUDE_TOL_FRAC of the target -- adjust the
+# tolerance if the printed match counts don't look right on your first run.
+ALMA_SUBBAND_EXCLUDE_FREQ_GHZ = {
+    3: [200.0, 400.0],   # epoch 3: drop the ~2e11 and ~4e11 Hz subband groups
+    4: [90.0],           # epoch 4: drop the ~9e10 Hz subband group
+}
+ALMA_SUBBAND_EXCLUDE_TOL_FRAC = 0.25
+
+# --- non-detections to keep in the fit as pseudo-detections ---------------
+# Included in the fit's likelihood with flux = SNR_THRESHOLD x fluxErr (the
+# 3-sigma upper limit value) and error = fluxErr (same error-floor logic as
+# everything else downstream in get_epoch_data) -- but still DISPLAYED as
+# an upper-limit triangle in plots, not a normal detection dot, since it's
+# still fundamentally a non-detection.
+VLA_NONDET_PROMOTE_EPOCHS = {6}
+
+# --- non-detections to drop entirely -- not in the fit, never plotted ----
+VLA_NONDET_IGNORE_EPOCHS = {5}
+
+
 def _load_wpp_raw():
-    days, freq, flux, fluxErr, det = [], [], [], [], []
+    days, freq, flux, fluxErr, det, source = [], [], [], [], [], []
 
     alma_path = os.path.join(_FILE_DIR, "wppALMA_subbands.txt")
     with open(alma_path) as fh:
@@ -460,6 +484,7 @@ def _load_wpp_raw():
             flux.append(float(cols[2]) * 1e-3)
             fluxErr.append(float(cols[3]) * 1e-3)
             det.append(float(cols[5]) > SNR_THRESHOLD)
+            source.append("alma_subbands")
 
     vla_path = os.path.join(_FILE_DIR, "wppVLA_subbands_epoch1_2_SbandIgnore.dat")
     with open(vla_path) as fh:
@@ -475,6 +500,7 @@ def _load_wpp_raw():
             flux.append(float(cols[3]) * 1e-3)
             fluxErr.append(float(cols[4]) * 1e-3)
             det.append(float(cols[6]) > SNR_THRESHOLD)
+            source.append("vla_subbands")
 
     nondets_path = os.path.join(_FILE_DIR, "wppVLA_nondets_SbandChange.txt")
     with open(nondets_path) as fh:
@@ -495,17 +521,147 @@ def _load_wpp_raw():
                 flux.append(float(cols[3]) * 1e-3)
                 fluxErr.append(float(cols[4]) * 1e-3)
                 det.append(bool(int(float(cols[6]))))
+                source.append("vla_nondets")
             except ValueError:
                 continue
 
+    # ALMA full-band values -- same column layout as the subbands file
+    # (freq, spws, flux, ferr, rms, snr, mjd). Loaded here but NOT used
+    # everywhere by default; _apply_wpp_alma_swap() below scopes their use
+    # to only the specific epoch/frequency combos being swapped in, to
+    # avoid double-counting against good subbands elsewhere.
+    fullband_path = os.path.join(_FILE_DIR, "wppALMA.txt")
+    if os.path.exists(fullband_path):
+        with open(fullband_path) as fh:
+            header_seen = False
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not header_seen:
+                    header_seen = True
+                    continue
+                cols = line.split()
+                if len(cols) < 7:
+                    continue
+                days.append(float(cols[6]) - T0_MJD_WPP)
+                freq.append(float(cols[0]))
+                flux.append(float(cols[2]) * 1e-3)
+                fluxErr.append(float(cols[3]) * 1e-3)
+                det.append(float(cols[5]) > SNR_THRESHOLD)
+                source.append("alma_fullband")
+    else:
+        print(f"    WARNING: {fullband_path} not found -- ALMA subband/"
+              f"full-band swap for epochs {list(ALMA_SUBBAND_EXCLUDE_FREQ_GHZ)} "
+              f"will NOT be applied (falling back to raw subbands there).")
+
     order = np.argsort(days)
-    return {
+    raw = {
         "days":    np.array(days)[order],
         "freq":    np.array(freq)[order],
         "flux":    np.array(flux)[order],
         "fluxErr": np.array(fluxErr)[order],
         "det":     np.array(det, dtype=bool)[order],
+        "source":  np.array(source)[order],
+        # tracks points that ARE included in the fit (det=True) but should
+        # still be DISPLAYED as upper limits (e.g. a promoted non-detection)
+        # rather than a normal detection marker. False for everything else.
+        "is_upper_limit": np.zeros(len(order), dtype=bool),
     }
+
+    raw = _apply_wpp_alma_swap(raw)
+    raw = _apply_wpp_nondet_ignore(raw)
+    raw = _apply_wpp_nondet_promotion(raw)
+    return raw
+
+
+def _apply_wpp_alma_swap(raw):
+    """Drop specific ALMA subband groups in specific epochs (per
+    ALMA_SUBBAND_EXCLUDE_FREQ_GHZ) and swap in the matching full-band
+    point(s) for THOSE epochs only -- full-band points are excluded
+    everywhere else by default to avoid double-counting against otherwise-
+    good subbands."""
+    z = SOURCE_INFO["wpp"]["z"]
+    t_rest = raw["days"] / (1 + z)
+    is_subband = raw["source"] == "alma_subbands"
+    is_fullband = raw["source"] == "alma_fullband"
+
+    keep = np.ones(len(raw["days"]), dtype=bool)
+    keep &= ~is_fullband  # excluded by default everywhere
+
+    for epoch_idx, targets_ghz in ALMA_SUBBAND_EXCLUDE_FREQ_GHZ.items():
+        t_lo, t_hi = EPOCH_GROUPS["wpp"][epoch_idx - 1]
+        in_epoch = (t_rest >= t_lo) & (t_rest <= t_hi)
+        for target in targets_ghz:
+            near = np.abs(raw["freq"] / target - 1.0) < ALMA_SUBBAND_EXCLUDE_TOL_FRAC
+            drop_sub = in_epoch & is_subband & near
+            add_full = in_epoch & is_fullband & near
+            keep &= ~drop_sub
+            keep |= add_full
+            print(f"    [wpp epoch {epoch_idx}] near {target:.0f} GHz: "
+                  f"dropping {drop_sub.sum()} ALMA subband point(s), "
+                  f"adding {add_full.sum()} full-band point(s)")
+
+    return {k: v[keep] for k, v in raw.items()}
+
+
+def _apply_wpp_nondet_promotion(raw):
+    """For epochs in VLA_NONDET_PROMOTE_EPOCHS, convert any non-detection
+    there into a pseudo-detection: flux = SNR_THRESHOLD x fluxErr (the
+    3-sigma upper-limit value), det=True -- so it participates in the fit
+    like any other point. Also flagged is_upper_limit=True so plotting
+    code can still render it as an upper limit (dimmed downward triangle)
+    rather than a normal detection marker, even though it's now det=True.
+    Error stays as fluxErr; the existing error-floor logic in
+    get_epoch_data applies to it the same as any other point."""
+    if not VLA_NONDET_PROMOTE_EPOCHS:
+        return raw
+    z = SOURCE_INFO["wpp"]["z"]
+    t_rest = raw["days"] / (1 + z)
+    det = raw["det"].copy()
+    flux = raw["flux"].copy()
+    is_upper_limit = raw["is_upper_limit"].copy()
+
+    for epoch_idx in VLA_NONDET_PROMOTE_EPOCHS:
+        t_lo, t_hi = EPOCH_GROUPS["wpp"][epoch_idx - 1]
+        in_epoch = (t_rest >= t_lo) & (t_rest <= t_hi)
+        hit = in_epoch & ~raw["det"]
+        n = int(hit.sum())
+        if n:
+            flux[hit] = SNR_THRESHOLD * raw["fluxErr"][hit]
+            det[hit] = True
+            is_upper_limit[hit] = True
+        print(f"    [wpp epoch {epoch_idx}] promoting {n} non-detection(s) "
+              f"to pseudo-detections (flux = {SNR_THRESHOLD}x sigma)")
+
+    raw2 = dict(raw)
+    raw2["det"] = det
+    raw2["is_upper_limit"] = is_upper_limit
+    raw2["flux"] = flux
+    return raw2
+
+
+def _apply_wpp_nondet_ignore(raw):
+    """For epochs in VLA_NONDET_IGNORE_EPOCHS, drop non-detection rows
+    entirely -- not in the fit, never plotted anywhere (unlike the default
+    behavior for a non-detection, which excludes it from the fit but still
+    shows it as a dimmed upper-limit triangle)."""
+    if not VLA_NONDET_IGNORE_EPOCHS:
+        return raw
+    z = SOURCE_INFO["wpp"]["z"]
+    t_rest = raw["days"] / (1 + z)
+    drop = np.zeros(len(raw["days"]), dtype=bool)
+
+    for epoch_idx in VLA_NONDET_IGNORE_EPOCHS:
+        t_lo, t_hi = EPOCH_GROUPS["wpp"][epoch_idx - 1]
+        in_epoch = (t_rest >= t_lo) & (t_rest <= t_hi)
+        hit = in_epoch & ~raw["det"]
+        print(f"    [wpp epoch {epoch_idx}] dropping {int(hit.sum())} "
+              f"non-detection(s) entirely (never used, never plotted)")
+        drop |= hit
+
+    keep = ~drop
+    return {k: v[keep] for k, v in raw.items()}
 
 
 def _load_dbl_raw():
@@ -518,6 +674,7 @@ def _load_dbl_raw():
         "flux":    data["flux(mJy)"].values,
         "fluxErr": data["ferr(mJy)"].values,
         "det":     np.array(data["det"].values, dtype=bool),
+        "is_upper_limit": np.zeros(len(data), dtype=bool),
     }
 
 
@@ -545,6 +702,10 @@ def get_epoch_data(source, epoch_idx):
     flux_ep = raw["flux"][mask]
     eflux_ep = np.maximum(raw["fluxErr"][mask], FLUX_ERR_FLOOR_FRAC * flux_ep)
     freq_hz = raw["freq"][mask] * 1e9
+    # True for any of the above (fit-participating) points that should
+    # still be DISPLAYED as an upper limit (e.g. a promoted non-detection)
+    # rather than a normal detection marker.
+    is_upper_limit_ep = raw["is_upper_limit"][mask]
 
     # Non-detections in the same epoch window -- NOT included in the fit,
     # only for display. Plotted at SNR_THRESHOLD x their RMS noise
@@ -562,7 +723,7 @@ def get_epoch_data(source, epoch_idx):
     t_rest_mean = float(np.mean(t_rest_ep))
 
     return dict(freq=freq_hz, flux=flux_ep, eflux=eflux_ep, T=T, z=z, d_L=d_L,
-                epoch=epoch_idx, source=source,
+                epoch=epoch_idx, source=source, is_upper_limit=is_upper_limit_ep,
                 freq_nondet=freq_nondet_hz, upper_limit_nondet=upper_limit_nondet,
                 t_rest_min=t_rest_min, t_rest_max=t_rest_max,
                 t_rest_mean=t_rest_mean)
@@ -1168,6 +1329,17 @@ def make_sed_collage(cfg, fixed):
         eflux_data = ep["eflux"] * Lnu_conv
         freq_nondet = ep["freq_nondet"]
         upper_limit_nondet = ep["upper_limit_nondet"] * Lnu_conv
+        is_ul = ep["is_upper_limit"]
+
+        # Split the FIT-participating points (ep["freq"]/ep["flux"]) by
+        # whether they're a normal detection or a promoted non-detection
+        # (still used in the fit, but displayed as an upper limit, not a
+        # normal detection marker).
+        freq_true_det = freq_data[~is_ul]
+        flux_true_det = flux_data[~is_ul]
+        eflux_true_det = eflux_data[~is_ul]
+        freq_promoted = freq_data[is_ul]
+        flux_promoted = flux_data[is_ul]
 
         all_freq = np.concatenate([freq_data, freq_nondet]) if len(freq_nondet) else freq_data
         all_flux = np.concatenate([flux_data, upper_limit_nondet]) if len(freq_nondet) else flux_data
@@ -1178,12 +1350,18 @@ def make_sed_collage(cfg, fixed):
         ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
 
         ax = ax_flat[k]
-        ax.errorbar(freq_data, flux_data, yerr=eflux_data, fmt="o", ms=5,
-                    color="k", zorder=5)
+        ax.errorbar(freq_true_det, flux_true_det, yerr=eflux_true_det, fmt="o",
+                    ms=5, color="k", zorder=5)
+        # upper limits: dimmed, downward-pointing triangles, plotted at
+        # SNR_THRESHOLD x their RMS noise (not the raw measured flux).
+        # Includes BOTH true non-detections (excluded from the fit) and
+        # any promoted non-detection (included in the fit, still shown
+        # this way) -- same visual treatment for both.
         if len(freq_nondet):
-            # upper limits: dimmed, downward-pointing triangles, plotted at
-            # SNR_THRESHOLD x their RMS noise (not their raw measured flux)
             ax.scatter(freq_nondet, upper_limit_nondet, marker="v", s=45,
+                       color="k", alpha=0.35, zorder=4)
+        if len(freq_promoted):
+            ax.scatter(freq_promoted, flux_promoted, marker="v", s=45,
                        color="k", alpha=0.35, zorder=4)
         Fnu_best = _fnu_fitted_R(theta_best, free_labels, nu_grid, ep["T"],
                                   ep["z"], ep["d_L"], fixed,
