@@ -297,6 +297,32 @@ def pretty_title(source, mode, epoch=None):
     return f"{name} Joint Fit (All Epochs)"
 
 
+def dlnF_dlnnu(F_nu, nu):
+    """Numerical local spectral index lambda = d ln(F_nu) / d ln(nu).
+
+    A log-log derivative, so it's invariant to whatever normalization
+    F_nu is in (Jy, cgs flux density, or L_nu) -- only the shape matters.
+
+    Parameters
+    ----------
+    F_nu : array
+        Specific flux or luminosity values (any consistent normalization).
+    nu : array
+        Frequency (Hz), same length as F_nu.
+
+    Returns
+    -------
+    lognu : array
+        log(nu), same ordering as input.
+    log_diff : array
+        Local spectral index at each frequency.
+    """
+    logF = np.log(np.abs(F_nu))
+    lognu = np.log(nu)
+    log_diff = np.gradient(logF, lognu)
+    return lognu, log_diff
+
+
 def natural_xy_limits(nu_grid, curves, freq_data=None, flux_data=None,
                        pad_dex=0.3, thresh_frac=1e-3):
     """Frequency/flux axis limits sized to where the model curves (and
@@ -1138,6 +1164,23 @@ def make_sed_collage(cfg, fixed):
                                   cfg["therm_el"], cfg["pl_el"])
         Lnu_best = Fnu_best * Lnu_conv
         ax.plot(nu_grid, Lnu_best, color="crimson", lw=2.2)
+
+        # Local spectral index lambda = d ln(Lnu)/d ln(nu), evaluated at the
+        # data's own lowest/highest frequency (the edges actually
+        # constrained by observations) -- log-log derivative, so identical
+        # whether computed on Lnu or Fnu. Generally the low-nu value
+        # reflects optically-thick behavior and the high-nu value
+        # optically-thin, but only if the true SSA peak actually falls
+        # within this epoch's observed band -- otherwise both edges may
+        # sit on the same side of the peak, so these are reported neutrally
+        # as "low-nu"/"high-nu" rather than assumed thick/thin labels.
+        lognu_grid, lam_grid = dlnF_dlnnu(Lnu_best, nu_grid)
+        lam_lo = np.interp(np.log(freq_data.min()), lognu_grid, lam_grid)
+        lam_hi = np.interp(np.log(freq_data.max()), lognu_grid, lam_grid)
+        ax.text(0.03, 0.03,
+                f"$\\lambda_{{low}}$={lam_lo:.2f}\n$\\lambda_{{high}}$={lam_hi:.2f}",
+                transform=ax.transAxes, fontsize=9, va="bottom", ha="left",
+                bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
 
         ax.set_xlim(xlim); ax.set_ylim(ylim)
         ax.set_xscale("log"); ax.set_yscale("log")
