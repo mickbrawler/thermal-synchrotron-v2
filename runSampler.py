@@ -179,6 +179,7 @@ TIME_ONLY           = False
 MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
 MAKE_SED_COLLAGE     = False
+MAKE_SLOPE_COLLAGE   = False
 REPLOT               = False
 
 # --- "turning knobs" SED sensitivity plot (fitted_R model only) ---
@@ -718,9 +719,14 @@ def get_epoch_data(source, epoch_idx):
     # actual rest-frame time span/mean of the data points used (distinct
     # from the EPOCH_GROUPS bin edges) -- used for SED collage titles
     t_rest_ep = t_rest[mask]
-    t_rest_min = float(np.min(t_rest_ep))
-    t_rest_max = float(np.max(t_rest_ep))
-    t_rest_mean = float(np.mean(t_rest_ep))
+    if len(t_rest_ep):
+        t_rest_min = float(np.min(t_rest_ep))
+        t_rest_max = float(np.max(t_rest_ep))
+        t_rest_mean = float(np.mean(t_rest_ep))
+    else:
+        # genuinely zero detections in this epoch -- don't crash, just
+        # report NaN for the time-span fields (T above will also be NaN)
+        t_rest_min = t_rest_max = t_rest_mean = float("nan")
 
     return dict(freq=freq_hz, flux=flux_ep, eflux=eflux_ep, T=T, z=z, d_L=d_L,
                 epoch=epoch_idx, source=source, is_upper_limit=is_upper_limit_ep,
@@ -1369,18 +1375,6 @@ def make_sed_collage(cfg, fixed):
         Lnu_best = Fnu_best * Lnu_conv
         ax.plot(nu_grid, Lnu_best, color="crimson", lw=2.2)
 
-        # Local spectral index Lambda = d ln(Lnu)/d ln(nu) across the curve.
-        # The optically-thick slope is the steepest positive part of the
-        # SED (below the SSA turnover), so taking the max over the whole
-        # curve picks that out directly, regardless of exactly where the
-        # turnover falls relative to the observed band. Log-log derivative,
-        # so identical whether computed on Lnu or Fnu.
-        _, lam_grid = dlnF_dlnnu(Lnu_best, nu_grid)
-        Lambda_max = np.max(lam_grid)
-        ax.text(0.03, 0.03, f"$\\Lambda$={Lambda_max:.2f}",
-                transform=ax.transAxes, fontsize=9, va="bottom", ha="left",
-                bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.85))
-
         ax.set_xlim(xlim); ax.set_ylim(ylim)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
@@ -1394,6 +1388,65 @@ def make_sed_collage(cfg, fixed):
     name = SOURCE_DISPLAY_NAMES.get(source, source)
     fig.suptitle(f"{name} -- SED Fits by Epoch")
     outpath = os.path.join(plots_rundir, f"{source}_sed_collage.png")
+    fig.savefig(outpath, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
+
+
+def make_slope_collage(cfg):
+    """Grid of per-epoch slope-vs-frequency: for N fit-participating SED
+    data points (sorted by frequency), computes the N-1 discrete slopes
+    between CONSECUTIVE points (not a smooth fit-curve derivative), each
+    plotted at the geometric mean frequency of its bracketing pair. Pure
+    data diagnostic -- doesn't need any fit to already exist, since it
+    reads straight from get_epoch_data()."""
+    source = cfg["source"]
+    plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+    os.makedirs(plots_rundir, exist_ok=True)
+
+    n_epochs = len(EPOCH_GROUPS[source])
+    ncols = min(3, n_epochs)
+    nrows = int(np.ceil(n_epochs / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+                              constrained_layout=True)
+    ax_flat = np.atleast_1d(axes).reshape(-1)
+
+    for k in range(n_epochs):
+        epoch_idx = k + 1
+        ep = get_epoch_data(source, epoch_idx)
+        ax = ax_flat[k]
+
+        order = np.argsort(ep["freq"])
+        freq_s = ep["freq"][order]
+        flux_s = ep["flux"][order]
+
+        if len(freq_s) < 2:
+            ax.set_xscale("log")
+            ax.text(0.5, 0.5, "< 2 points\n(no slope)", ha="center", va="center",
+                    transform=ax.transAxes, color="0.5")
+        else:
+            log_nu = np.log(freq_s)
+            log_F = np.log(np.abs(flux_s))
+            slopes = np.diff(log_F) / np.diff(log_nu)
+            # representative x-position for each slope: geometric mean of
+            # the two frequencies bracketing it
+            nu_mid = np.sqrt(freq_s[:-1] * freq_s[1:])
+
+            ax.plot(nu_mid, slopes, "o-", color="crimson", lw=1.5, ms=5)
+            ax.axhline(0, color="0.75", lw=0.8, ls=":")
+            ax.set_xscale("log")
+
+        ax.set_title(f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f} d "
+                     r"($\langle t\rangle$=" + f"{ep['t_rest_mean']:.1f} d)")
+        ax.set_xlabel(r"$\nu$ (Hz)")
+        ax.set_ylabel(r"slope $d\ln F_\nu/d\ln\nu$")
+
+    for k in range(n_epochs, len(ax_flat)):
+        ax_flat[k].set_visible(False)
+
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    fig.suptitle(f"{name} -- Slope vs Frequency (from SED data points)")
+    outpath = os.path.join(plots_rundir, f"{source}_slope_collage.png")
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"    saved -> {outpath}")
@@ -1767,6 +1820,10 @@ def parse_args():
     p.add_argument("--make_sed_collage", action="store_true", default=None,
                    help="grid of per-epoch SEDs (data + Max Likelihood only) "
                         "for a source; use with --source/--dir")
+    p.add_argument("--make_slope_collage", action="store_true", default=None,
+                   help="grid of per-epoch slope-vs-frequency (discrete slopes "
+                        "between consecutive SED data points); use with "
+                        "--source/--dir, no fit required")
     p.add_argument("--replot", action="store_true", default=None,
                    help="regenerate plots from an existing saved chain "
                         "(no resampling); use with --source/--mode/--epoch/--dir "
@@ -1843,6 +1900,7 @@ def build_config():
         time_only   = _resolve(cli.time_only, TIME_ONLY),
         make_evolution_plot = _resolve(cli.make_evolution_plot, MAKE_EVOLUTION_PLOT),
         make_sed_collage = _resolve(cli.make_sed_collage, MAKE_SED_COLLAGE),
+        make_slope_collage = _resolve(cli.make_slope_collage, MAKE_SLOPE_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
         make_knob_plot = _resolve(cli.make_knob_plot, MAKE_KNOB_PLOT),
         knob_source = _resolve(cli.knob_source, KNOB_SOURCE),
@@ -1874,6 +1932,10 @@ def main():
 
     if cfg["make_sed_collage"]:
         make_sed_collage(cfg, fixed)
+        return
+
+    if cfg["make_slope_collage"]:
+        make_slope_collage(cfg)
         return
 
     if cfg["make_knob_plot"]:
