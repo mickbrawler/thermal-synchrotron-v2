@@ -538,12 +538,21 @@ def get_epoch_data(source, epoch_idx):
 
     t_lo, t_hi = EPOCH_GROUPS[source][epoch_idx - 1]
     t_rest = raw["days"] / (1 + z)
-    mask = (t_rest >= t_lo) & (t_rest <= t_hi) & raw["det"]
+    in_epoch = (t_rest >= t_lo) & (t_rest <= t_hi)
+    mask = in_epoch & raw["det"]
 
     T = float(np.mean(raw["days"][mask]))
     flux_ep = raw["flux"][mask]
     eflux_ep = np.maximum(raw["fluxErr"][mask], FLUX_ERR_FLOOR_FRAC * flux_ep)
     freq_hz = raw["freq"][mask] * 1e9
+
+    # Non-detections in the same epoch window -- NOT included in the fit,
+    # only for display. Plotted at SNR_THRESHOLD x their RMS noise
+    # (fluxErr), not their raw (possibly noisy/insignificant) measured
+    # flux, per standard upper-limit convention.
+    nondet_mask = in_epoch & ~raw["det"]
+    freq_nondet_hz = raw["freq"][nondet_mask] * 1e9
+    upper_limit_nondet = SNR_THRESHOLD * raw["fluxErr"][nondet_mask]
 
     # actual rest-frame time span/mean of the data points used (distinct
     # from the EPOCH_GROUPS bin edges) -- used for SED collage titles
@@ -554,6 +563,7 @@ def get_epoch_data(source, epoch_idx):
 
     return dict(freq=freq_hz, flux=flux_ep, eflux=eflux_ep, T=T, z=z, d_L=d_L,
                 epoch=epoch_idx, source=source,
+                freq_nondet=freq_nondet_hz, upper_limit_nondet=upper_limit_nondet,
                 t_rest_min=t_rest_min, t_rest_max=t_rest_max,
                 t_rest_mean=t_rest_mean)
 
@@ -1156,16 +1166,25 @@ def make_sed_collage(cfg, fixed):
         Lnu_conv = 4.0 * np.pi * ep["d_L"] ** 2 * C.Jy
         flux_data = ep["flux"] * Lnu_conv
         eflux_data = ep["eflux"] * Lnu_conv
+        freq_nondet = ep["freq_nondet"]
+        upper_limit_nondet = ep["upper_limit_nondet"] * Lnu_conv
 
-        log_flo, log_fhi = np.log10(freq_data.min()), np.log10(freq_data.max())
+        all_freq = np.concatenate([freq_data, freq_nondet]) if len(freq_nondet) else freq_data
+        all_flux = np.concatenate([flux_data, upper_limit_nondet]) if len(freq_nondet) else flux_data
+        log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
         xlim = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
         nu_grid = np.logspace(np.log10(xlim[0]), np.log10(xlim[1]), 400)
-        log_ylo, log_yhi = np.log10(flux_data.min()), np.log10(flux_data.max())
+        log_ylo, log_yhi = np.log10(all_flux.min()), np.log10(all_flux.max())
         ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
 
         ax = ax_flat[k]
         ax.errorbar(freq_data, flux_data, yerr=eflux_data, fmt="o", ms=5,
                     color="k", zorder=5)
+        if len(freq_nondet):
+            # upper limits: dimmed, downward-pointing triangles, plotted at
+            # SNR_THRESHOLD x their RMS noise (not their raw measured flux)
+            ax.scatter(freq_nondet, upper_limit_nondet, marker="v", s=45,
+                       color="k", alpha=0.35, zorder=4)
         Fnu_best = _fnu_fitted_R(theta_best, free_labels, nu_grid, ep["T"],
                                   ep["z"], ep["d_L"], fixed,
                                   cfg["therm_el"], cfg["pl_el"])
