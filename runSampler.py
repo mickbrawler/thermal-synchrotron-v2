@@ -197,6 +197,13 @@ KNOB_T               = 50.0      # observer-frame days, used unless
 KNOB_FROM_SUMMARY    = None      # path to a "*_summary.csv"; None = use
                                   # prior midpoints for the free params
 KNOB_N_VALUES        = 5
+KNOB_VARIANT         = "combined"  # "combined" / "pl_only" / "therm_only"
+# combined:   uses THERM_EL/PL_EL as set above (or --therm_el/--pl_el)
+# pl_only:    forces therm_el=False, pl_el=True  (isolates the PL population)
+# therm_only: forces therm_el=True, pl_el=False  (isolates the thermal population)
+# Note eps_T still affects the pl_only variant (it sets Theta, which sets
+# gamma_m -- where the PL population starts) -- only eps_e is truly inert
+# in the therm_only variant.
 
 # (lo, hi) sweep range for each dial. Free params reuse PRIORS_FITTED_R
 # below (after that dict is defined); fixed-param ranges are physically
@@ -1256,6 +1263,17 @@ def _eval_knob_sed(nu, params, T, z, d_L, therm_el, pl_el):
 
 
 def make_knob_plot(cfg):
+    variant = cfg["knob_variant"]
+    if variant == "pl_only":
+        therm_el, pl_el = False, True
+        variant_label, variant_suffix = "Power-Law Only", "plonly"
+    elif variant == "therm_only":
+        therm_el, pl_el = True, False
+        variant_label, variant_suffix = "Thermal Only", "thermonly"
+    else:
+        therm_el, pl_el = cfg["therm_el"], cfg["pl_el"]
+        variant_label, variant_suffix = "Combined", "combined"
+
     center, T, z, d_L = _knob_center(cfg)
     bounds, logspace = _knob_bounds_and_logspace()
     nu_grid = np.logspace(8, 13, 400)
@@ -1265,8 +1283,7 @@ def make_knob_plot(cfg):
     cmap = plt.get_cmap("viridis")
 
     # top-left: unchanged baseline
-    base_curve = _eval_knob_sed(nu_grid, center, T, z, d_L,
-                                cfg["therm_el"], cfg["pl_el"])
+    base_curve = _eval_knob_sed(nu_grid, center, T, z, d_L, therm_el, pl_el)
     xlim, ylim = natural_xy_limits(nu_grid, [base_curve])
     ax0 = ax_flat[0]
     ax0.plot(nu_grid, base_curve, color="k", lw=2.5)
@@ -1299,8 +1316,7 @@ def make_knob_plot(cfg):
         for val, col in zip(values, colors):
             trial = dict(center)
             trial[lab] = val
-            Fnu = _eval_knob_sed(nu_grid, trial, T, z, d_L,
-                                  cfg["therm_el"], cfg["pl_el"])
+            Fnu = _eval_knob_sed(nu_grid, trial, T, z, d_L, therm_el, pl_el)
             curves.append(Fnu)
             ax.plot(nu_grid, Fnu, color=col, lw=1.5,
                     label=f"{val:.3g}")
@@ -1318,13 +1334,13 @@ def make_knob_plot(cfg):
     name = SOURCE_DISPLAY_NAMES.get(cfg["knob_source"], cfg["knob_source"])
     center_note = (f"centered on {os.path.basename(cfg['knob_from_summary'])}"
                    if cfg["knob_from_summary"] else "centered on prior midpoints")
-    fig.suptitle(f"{name} -- SED Sensitivity to Each Parameter "
+    fig.suptitle(f"{name} -- SED Sensitivity to Each Parameter -- {variant_label} "
                  f"(T={T:.1f}d, {center_note})", y=1.01)
     fig.tight_layout()
 
     plots_dir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
     os.makedirs(plots_dir, exist_ok=True)
-    outpath = os.path.join(plots_dir, f"knob_plot_{cfg['knob_source']}.png")
+    outpath = os.path.join(plots_dir, f"knob_plot_{cfg['knob_source']}_{variant_suffix}.png")
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"    saved -> {outpath}")
@@ -1565,6 +1581,8 @@ def parse_args():
                    help="path to a *_summary.csv to center the free-param "
                         "dials on a real epoch's MAP fit (also uses its T)")
     p.add_argument("--knob_n_values", type=int, default=None)
+    p.add_argument("--knob_variant", default=None,
+                   choices=["combined", "pl_only", "therm_only"])
     p.add_argument("--therm_el", dest="therm_el", action="store_true", default=None)
     p.add_argument("--no-therm_el", dest="therm_el", action="store_false")
     p.add_argument("--pl_el", dest="pl_el", action="store_true", default=None)
@@ -1634,6 +1652,7 @@ def build_config():
         knob_T = _resolve(cli.knob_T, KNOB_T),
         knob_from_summary = _resolve(cli.knob_from_summary, KNOB_FROM_SUMMARY),
         knob_n_values = _resolve(cli.knob_n_values, KNOB_N_VALUES),
+        knob_variant = _resolve(cli.knob_variant, KNOB_VARIANT),
         therm_el    = _resolve(cli.therm_el, THERM_EL),
         pl_el       = _resolve(cli.pl_el, PL_EL),
         check_convergence       = CHECK_CONVERGENCE,
