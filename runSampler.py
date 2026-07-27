@@ -179,6 +179,7 @@ TIME_ONLY           = False
 MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
 MAKE_SED_COLLAGE     = False
+MAKE_SED_OVERLAY     = False
 MAKE_SLOPE_COLLAGE   = False
 MAKE_HIGHFREQ_COLLAGE = False
 REPLOT               = False
@@ -1403,6 +1404,126 @@ def make_sed_collage(cfg, fixed):
     print(f"    saved -> {outpath}")
 
 
+def make_sed_overlay_plot(cfg, fixed):
+    """Single-panel alternative to the SED collage: every epoch's data +
+    Max Likelihood fit overlaid on one set of axes, colored by time
+    (bluer = earlier/younger, redder = later/older) via a colorbar
+    instead of a per-epoch legend."""
+    source = cfg["source"]
+    data_rundir = os.path.join(cfg["outdir"], "data", cfg["run_tag"])
+    plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+    os.makedirs(plots_rundir, exist_ok=True)
+
+    pattern = os.path.join(data_rundir, f"{source}_fittedR_ep*",
+                            f"{source}_fittedR_ep*_summary.csv")
+    files = sorted(glob.glob(pattern),
+                   key=lambda f: int(re.search(r"ep(\d+)_summary", f).group(1)))
+    if not files:
+        raise FileNotFoundError(
+            f"No per-epoch summaries found matching {pattern}. "
+            f"Run MODE='fitted_R' for each epoch of '{source}' first."
+        )
+
+    # Gather everything per epoch first (need the full time range before
+    # picking colors, and a single shared nu_grid to evaluate every
+    # epoch's fit curve on for a consistent combined axis range).
+    records = []
+    all_freq_list = []
+    for f in files:
+        row = pd.read_csv(f).iloc[0]
+        epoch_idx = int(re.search(r"ep(\d+)_summary", f).group(1))
+        tag = f"{source}_fittedR_ep{epoch_idx}"
+        ep = get_epoch_data(source, epoch_idx)
+
+        best_cols = [c for c in row.index if c.endswith("_best")]
+        free_labels = [c[:-len("_best")] for c in best_cols]
+        theta_best = np.array([row[c] for c in best_cols])
+
+        config_path = os.path.join(plots_rundir, tag, f"{tag}_config.txt")
+        mismatches = check_fixed_params_match(config_path, fixed)
+        if mismatches is None:
+            print(f"    {tag}: no saved config found to verify against -- "
+                  f"can't confirm FIXED_PARAMS matches what this epoch actually used.")
+        elif mismatches:
+            print(f"    {tag}: MISMATCH vs saved config -- " + "; ".join(mismatches))
+
+        records.append(dict(epoch=epoch_idx, ep=ep, theta_best=theta_best,
+                            free_labels=free_labels, t=ep["t_rest_mean"]))
+        all_freq_list.append(ep["freq"])
+        if len(ep["freq_nondet"]):
+            all_freq_list.append(ep["freq_nondet"])
+
+    times = np.array([r["t"] for r in records])
+    cmap = plt.get_cmap("coolwarm")  # blue (low/young) -> red (high/old)
+    norm = plt.Normalize(vmin=times.min(), vmax=times.max())
+
+    all_freq = np.concatenate(all_freq_list)
+    log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
+    xlim_est = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
+    nu_grid = np.logspace(np.log10(xlim_est[0]), np.log10(xlim_est[1]), 500)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    curves_for_range = []
+    flux_for_range = []
+
+    for r in records:
+        ep = r["ep"]
+        color = cmap(norm(r["t"]))
+        Lnu_conv = 4.0 * np.pi * ep["d_L"] ** 2 * C.Jy
+
+        is_ul = ep["is_upper_limit"]
+        freq_true_det = ep["freq"][~is_ul]
+        flux_true_det = ep["flux"][~is_ul] * Lnu_conv
+        eflux_true_det = ep["eflux"][~is_ul] * Lnu_conv
+        freq_promoted = ep["freq"][is_ul]
+        flux_promoted = ep["flux"][is_ul] * Lnu_conv
+        freq_nondet = ep["freq_nondet"]
+        upper_limit_nondet = ep["upper_limit_nondet"] * Lnu_conv
+
+        ax.errorbar(freq_true_det, flux_true_det, yerr=eflux_true_det, fmt="o",
+                    ms=5, color=color, zorder=5)
+        if len(freq_promoted):
+            ax.scatter(freq_promoted, flux_promoted, marker="v", s=45,
+                       color=color, alpha=0.35, zorder=4)
+        if len(freq_nondet):
+            ax.scatter(freq_nondet, upper_limit_nondet, marker="v", s=45,
+                       color=color, alpha=0.35, zorder=4)
+
+        Fnu_best = _fnu_fitted_R(r["theta_best"], r["free_labels"], nu_grid,
+                                  ep["T"], ep["z"], ep["d_L"], fixed,
+                                  cfg["therm_el"], cfg["pl_el"])
+        Lnu_best = Fnu_best * Lnu_conv
+        ax.plot(nu_grid, Lnu_best, color=color, lw=2.0)
+
+        curves_for_range.append(Lnu_best)
+        flux_for_range.append(flux_true_det)
+        if len(freq_promoted):
+            flux_for_range.append(flux_promoted)
+        if len(freq_nondet):
+            flux_for_range.append(upper_limit_nondet)
+
+    all_flux = np.concatenate(flux_for_range)
+    xlim, ylim = natural_xy_limits(nu_grid, curves_for_range,
+                                    freq_data=all_freq, flux_data=all_flux)
+    ax.set_xlim(xlim); ax.set_ylim(ylim)
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel(r"$\nu$ (Hz)")
+    ax.set_ylabel(r"$L_\nu$ (ergs s$^{-1}$ Hz$^{-1}$)")
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label("Time (days)")
+
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    ax.set_title(f"{name} -- SED Overlay by Epoch")
+    fig.tight_layout()
+    outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
+    fig.savefig(outpath, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
+
+
 def make_slope_collage(cfg):
     """Grid of per-epoch slope-vs-frequency: for N fit-participating SED
     data points (sorted by frequency), computes the N-1 discrete slopes
@@ -1981,6 +2102,10 @@ def parse_args():
     p.add_argument("--make_sed_collage", action="store_true", default=None,
                    help="grid of per-epoch SEDs (data + Max Likelihood only) "
                         "for a source; use with --source/--dir")
+    p.add_argument("--make_sed_overlay", action="store_true", default=None,
+                   help="single-panel alternative to the SED collage: every "
+                        "epoch overlaid, colored by time via a colorbar "
+                        "(no legend); use with --source/--dir")
     p.add_argument("--make_slope_collage", action="store_true", default=None,
                    help="grid of per-epoch slope-vs-frequency (discrete slopes "
                         "between consecutive SED data points); use with "
@@ -2066,6 +2191,7 @@ def build_config():
         time_only   = _resolve(cli.time_only, TIME_ONLY),
         make_evolution_plot = _resolve(cli.make_evolution_plot, MAKE_EVOLUTION_PLOT),
         make_sed_collage = _resolve(cli.make_sed_collage, MAKE_SED_COLLAGE),
+        make_sed_overlay = _resolve(cli.make_sed_overlay, MAKE_SED_OVERLAY),
         make_slope_collage = _resolve(cli.make_slope_collage, MAKE_SLOPE_COLLAGE),
         make_highfreq_collage = _resolve(cli.make_highfreq_collage, MAKE_HIGHFREQ_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
@@ -2099,6 +2225,10 @@ def main():
 
     if cfg["make_sed_collage"]:
         make_sed_collage(cfg, fixed)
+        return
+
+    if cfg["make_sed_overlay"]:
+        make_sed_overlay_plot(cfg, fixed)
         return
 
     if cfg["make_slope_collage"]:
