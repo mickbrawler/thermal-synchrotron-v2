@@ -1410,7 +1410,7 @@ def make_sed_collage(cfg, fixed):
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
     #"dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
-    "dbl": {3: [-2.5]},
+    "dbl": {3: [-1.0]},
 }
 
 
