@@ -1410,7 +1410,7 @@ def make_sed_collage(cfg, fixed):
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
     #"dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
-    "dbl": {3: [-1.0]},
+    "dbl": {3: [-1]},
 }
 
 
@@ -1517,10 +1517,11 @@ def make_sed_overlay_plot(cfg, fixed):
                                          np.array([anchor_x]), ep["T"], ep["z"],
                                          ep["d_L"], fixed, cfg["therm_el"],
                                          cfg["pl_el"])[0] * Lnu_conv
+                nu_line = nu_grid[nu_grid >= anchor_x]
                 for m in ref_slopes:
-                    ref_curve = anchor_y * (nu_grid / anchor_x) ** m
-                    ax.plot(nu_grid, ref_curve, color=color, ls="--", lw=1.3,
-                            alpha=0.85, label=f"Power law (nu^{m})")
+                    ref_curve = anchor_y * (nu_line / anchor_x) ** m
+                    ax.plot(nu_line, ref_curve, color=color, ls="--", lw=1.3,
+                            alpha=0.85, label=rf"Power law ($\nu^{{{m}}}$)")
 
         curves_for_range.append(Lnu_best)
         flux_for_range.append(flux_true_det)
