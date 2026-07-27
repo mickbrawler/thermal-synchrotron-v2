@@ -1,62 +1,60 @@
 #!/bin/bash
 # make_all_plots.sh
-# Regenerates the evolution+density-profile plots, SED collage,
-# slope-vs-frequency collage, and high-frequency linear-fit collage for
-# both sources, across all 5 run configs.
-# Safe to re-run any time -- these all just read already-saved data, no
-# resampling happens.
+# Regenerates the evolution+density-profile plots, SED collage, SED
+# overlay, slope-vs-frequency collage, and high-frequency linear-fit
+# collage. Safe to re-run any time -- these all just read already-saved
+# data, no resampling happens.
 #
-# NOTE: SED collage reconstructs the SED using whatever's currently
+# USAGE:
+#   bash make_all_plots.sh                # everything: both sources, all 5 runs
+#   bash make_all_plots.sh wpp             # wpp only, all 5 runs
+#   bash make_all_plots.sh wpp run3        # wpp + run3 only
+#   bash make_all_plots.sh "" run3         # both sources, run3 only
+#                                            (empty "" needed to skip SOURCE
+#                                            while still specifying RUN)
+#
+# NOTE: SED collage/overlay reconstruct the SED using whatever's currently
 # passed as fixed params for anything that WASN'T free in that run -- so
-# each run's SED collage call below passes the matching override for
-# whatever it fixed away from the run1 defaults (eps_B=0.1, eps_e=0.1).
-# The evolution/density-profile plots never need this since they're read
-# straight from each epoch's saved posterior summary. The slope collage
-# doesn't need it either (or any fit at all) -- it's pure data, computed
-# directly from the same raw SED points regardless of which run's fixed
-# params you used, so it comes out identical across run1-5; it's just
-# regenerated into each run's own plot folder for convenience.
-#
-# Usage: bash make_all_plots.sh
+# each run below carries the matching override for whatever it fixed away
+# from the run1 defaults (eps_B=0.1, eps_e=0.1). The evolution/density-
+# profile plots never need this since they're read straight from each
+# epoch's saved posterior summary. The slope collage and high-frequency
+# collage don't need it either (or any fit at all) -- they're pure data,
+# so they come out identical across run1-5; they're just regenerated into
+# each run's own plot folder for convenience.
+
 set -e  # stop immediately if any command fails, rather than plowing on
 
-for SOURCE in wpp dbl; do
+SOURCE_ARG="$1"
+RUN_ARG="$2"
 
-    # ===== run1 (defaults: eps_B=0.1, eps_e=0.1) =====
-    python runSampler.py --make_evolution_plot --source "$SOURCE" --dir run1
-    python runSampler.py --make_sed_collage    --source "$SOURCE" --dir run1
-    python runSampler.py --make_sed_overlay    --source "$SOURCE" --dir run1
-    python runSampler.py --make_slope_collage  --source "$SOURCE" --dir run1
-    python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir run1
+if [ -n "$SOURCE_ARG" ]; then
+    SOURCES=("$SOURCE_ARG")
+else
+    SOURCES=(wpp dbl)
+fi
 
-    # ===== run2 (eps_B fixed at 0.01) =====
-    python runSampler.py --make_evolution_plot --source "$SOURCE" --dir run2
-    python runSampler.py --make_sed_collage    --source "$SOURCE" --dir run2 --eps_B 0.01
-    python runSampler.py --make_sed_overlay    --source "$SOURCE" --dir run2 --eps_B 0.01
-    python runSampler.py --make_slope_collage  --source "$SOURCE" --dir run2
-    python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir run2
+# parallel arrays: run name <-> its fixed-param override (matching what
+# that run's actual fit used away from the run1 defaults)
+RUN_NAMES=(run1 run2 run3 run4 run5)
+RUN_EXTRA_ARGS=("" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01")
 
-    # ===== run3 (eps_e fixed at 0.01) =====
-    python runSampler.py --make_evolution_plot --source "$SOURCE" --dir run3
-    python runSampler.py --make_sed_collage    --source "$SOURCE" --dir run3 --eps_e 0.01
-    python runSampler.py --make_sed_overlay    --source "$SOURCE" --dir run3 --eps_e 0.01
-    python runSampler.py --make_slope_collage  --source "$SOURCE" --dir run3
-    python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir run3
+for SOURCE in "${SOURCES[@]}"; do
+    for i in "${!RUN_NAMES[@]}"; do
+        RUN="${RUN_NAMES[$i]}"
+        EXTRA="${RUN_EXTRA_ARGS[$i]}"
 
-    # ===== run4 (eps_B FREE -- auto-recovered from the fit, no override needed) =====
-    python runSampler.py --make_evolution_plot --source "$SOURCE" --dir run4
-    python runSampler.py --make_sed_collage    --source "$SOURCE" --dir run4
-    python runSampler.py --make_sed_overlay    --source "$SOURCE" --dir run4
-    python runSampler.py --make_slope_collage  --source "$SOURCE" --dir run4
-    python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir run4
+        if [ -n "$RUN_ARG" ] && [ "$RUN" != "$RUN_ARG" ]; then
+            continue
+        fi
 
-    # ===== run5 (eps_B FREE + eps_e fixed at 0.01) =====
-    python runSampler.py --make_evolution_plot --source "$SOURCE" --dir run5
-    python runSampler.py --make_sed_collage    --source "$SOURCE" --dir run5 --eps_e 0.01
-    python runSampler.py --make_sed_overlay    --source "$SOURCE" --dir run5 --eps_e 0.01
-    python runSampler.py --make_slope_collage  --source "$SOURCE" --dir run5
-    python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir run5
-
+        echo "=== $SOURCE / $RUN ==="
+        python runSampler.py --make_evolution_plot   --source "$SOURCE" --dir "$RUN"
+        python runSampler.py --make_sed_collage      --source "$SOURCE" --dir "$RUN" $EXTRA
+        python runSampler.py --make_sed_overlay      --source "$SOURCE" --dir "$RUN" $EXTRA
+        python runSampler.py --make_slope_collage    --source "$SOURCE" --dir "$RUN"
+        python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir "$RUN"
+    done
 done
 
-echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit plots regenerated for run1-run5."
+echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit plots regenerated."

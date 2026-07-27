@@ -1404,6 +1404,15 @@ def make_sed_collage(cfg, fixed):
     print(f"    saved -> {outpath}")
 
 
+# --- per-(source, epoch) reference power-law slopes to overlay on the
+# SED overlay plot, anchored on the FIT CURVE (not the data point itself)
+# at the frequency of the second-to-last (by frequency) SED point. Purely
+# a visual comparison aid -- add more (source, epoch) entries as needed. ---
+OVERLAY_REFERENCE_SLOPES = {
+    "dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
+}
+
+
 def make_sed_overlay_plot(cfg, fixed):
     """Single-panel alternative to the SED collage: every epoch's data +
     Max Likelihood fit overlaid on one set of axes, colored by time
@@ -1495,6 +1504,23 @@ def make_sed_overlay_plot(cfg, fixed):
         Lnu_best = Fnu_best * Lnu_conv
         ax.plot(nu_grid, Lnu_best, color=color, lw=2.0)
 
+        ref_slopes = OVERLAY_REFERENCE_SLOPES.get(source, {}).get(r["epoch"])
+        if ref_slopes:
+            # Anchor: x = second-to-last (by frequency) SED point; y = the
+            # FIT CURVE evaluated at that x (not the data point's own flux
+            # value) -- so the reference lines start exactly on the fit.
+            freq_sorted = np.sort(ep["freq"])
+            if len(freq_sorted) >= 2:
+                anchor_x = freq_sorted[-2]
+                anchor_y = _fnu_fitted_R(r["theta_best"], r["free_labels"],
+                                         np.array([anchor_x]), ep["T"], ep["z"],
+                                         ep["d_L"], fixed, cfg["therm_el"],
+                                         cfg["pl_el"])[0] * Lnu_conv
+                for m in ref_slopes:
+                    ref_curve = anchor_y * (nu_grid / anchor_x) ** m
+                    ax.plot(nu_grid, ref_curve, color=color, ls="--", lw=1.3,
+                            alpha=0.85, label=f"Power law (nu^{m})")
+
         curves_for_range.append(Lnu_best)
         flux_for_range.append(flux_true_det)
         if len(freq_promoted):
@@ -1515,8 +1541,12 @@ def make_sed_overlay_plot(cfg, fixed):
     cbar = fig.colorbar(sm, ax=ax)
     cbar.set_label("Time (days)")
 
-    name = SOURCE_DISPLAY_NAMES.get(source, source)
-    ax.set_title(f"{name} -- SED Overlay by Epoch")
+    # Only the reference power-law lines (if any were drawn for this
+    # source) carry a `label=`, so this naturally shows just those --
+    # no legend at all for sources/epochs with none configured.
+    if OVERLAY_REFERENCE_SLOPES.get(source):
+        ax.legend(fontsize=9, loc="best")
+
     fig.tight_layout()
     outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
