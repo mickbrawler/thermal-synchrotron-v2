@@ -1409,8 +1409,7 @@ def make_sed_collage(cfg, fixed):
 # at the frequency of the second-to-last (by frequency) SED point. Purely
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
-    #"dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
-    "dbl": {3: [-1]},
+    "dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
 }
 
 
@@ -1418,8 +1417,24 @@ def make_sed_overlay_plot(cfg, fixed):
     """Single-panel alternative to the SED collage: every epoch's data +
     Max Likelihood fit overlaid on one set of axes, colored by time
     (bluer = earlier/younger, redder = later/older) via a colorbar
-    instead of a per-epoch legend."""
+    instead of a per-epoch legend.
+
+    Axes: y = flux density in uJy (log scale), x = REST-FRAME frequency
+    in GHz (log scale) -- note the model itself is still evaluated at the
+    correct OBSERVED frequency/epoch internally; only the display x-values
+    are converted to rest frame (nu_rest = nu_obs * (1+z)).
+
+    Y-limits: padded by whole DECADES (the standard log-axis major-tick
+    unit) relative to the dimmest/brightest true DETECTION (non-detections/
+    promoted-upper-limit points don't count toward this) -- at least 2
+    decades below the dimmest, at least 3 above the brightest.
+
+    X-limits: set to exactly match the shared fit-curve frequency range
+    (same range every epoch's curve is evaluated over), no extra padding
+    beyond that.
+    """
     source = cfg["source"]
+    z = SOURCE_INFO[source]["z"]
     data_rundir = os.path.join(cfg["outdir"], "data", cfg["run_tag"])
     plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
     os.makedirs(plots_rundir, exist_ok=True)
@@ -1435,8 +1450,9 @@ def make_sed_overlay_plot(cfg, fixed):
         )
 
     # Gather everything per epoch first (need the full time range before
-    # picking colors, and a single shared nu_grid to evaluate every
-    # epoch's fit curve on for a consistent combined axis range).
+    # picking colors, and a single shared nu_grid -- in OBSERVED Hz, for
+    # correct model evaluation -- to evaluate every epoch's fit curve on
+    # for a consistent combined axis range).
     records = []
     all_freq_list = []
     for f in files:
@@ -1467,43 +1483,51 @@ def make_sed_overlay_plot(cfg, fixed):
     cmap = plt.get_cmap("coolwarm")  # blue (low/young) -> red (high/old)
     norm = plt.Normalize(vmin=times.min(), vmax=times.max())
 
+    # shared OBSERVED-frame nu_grid, same range for every epoch's curve
     all_freq = np.concatenate(all_freq_list)
     log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
-    xlim_est = (10 ** (log_flo - SED_PAD_DEX), 10 ** (log_fhi + SED_PAD_DEX))
-    nu_grid = np.logspace(np.log10(xlim_est[0]), np.log10(xlim_est[1]), 500)
+    nu_grid_lo = 10 ** (log_flo - SED_PAD_DEX)
+    nu_grid_hi = 10 ** (log_fhi + SED_PAD_DEX)
+    nu_grid = np.logspace(np.log10(nu_grid_lo), np.log10(nu_grid_hi), 500)
+    # rest-frame GHz version of that same grid, for display/x-limits only
+    nu_grid_disp = nu_grid * (1 + z) / 1e9
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    curves_for_range = []
-    flux_for_range = []
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+
+    detection_flux_uJy = []  # true detections only -- drives y-limit padding
 
     for r in records:
         ep = r["ep"]
         color = cmap(norm(r["t"]))
-        Lnu_conv = 4.0 * np.pi * ep["d_L"] ** 2 * C.Jy
 
         is_ul = ep["is_upper_limit"]
         freq_true_det = ep["freq"][~is_ul]
-        flux_true_det = ep["flux"][~is_ul] * Lnu_conv
-        eflux_true_det = ep["eflux"][~is_ul] * Lnu_conv
+        flux_true_det = ep["flux"][~is_ul] * 1e6      # Jy -> uJy
+        eflux_true_det = ep["eflux"][~is_ul] * 1e6
         freq_promoted = ep["freq"][is_ul]
-        flux_promoted = ep["flux"][is_ul] * Lnu_conv
+        flux_promoted = ep["flux"][is_ul] * 1e6
         freq_nondet = ep["freq_nondet"]
-        upper_limit_nondet = ep["upper_limit_nondet"] * Lnu_conv
+        upper_limit_nondet = ep["upper_limit_nondet"] * 1e6
 
-        ax.errorbar(freq_true_det, flux_true_det, yerr=eflux_true_det, fmt="o",
+        # display x-values: rest-frame GHz
+        disp_true_det = freq_true_det * (1 + z) / 1e9
+        disp_promoted = freq_promoted * (1 + z) / 1e9
+        disp_nondet = freq_nondet * (1 + z) / 1e9
+
+        ax.errorbar(disp_true_det, flux_true_det, yerr=eflux_true_det, fmt="o",
                     ms=5, color=color, zorder=5)
         if len(freq_promoted):
-            ax.scatter(freq_promoted, flux_promoted, marker="v", s=45,
+            ax.scatter(disp_promoted, flux_promoted, marker="v", s=45,
                        color=color, alpha=0.35, zorder=4)
         if len(freq_nondet):
-            ax.scatter(freq_nondet, upper_limit_nondet, marker="v", s=45,
+            ax.scatter(disp_nondet, upper_limit_nondet, marker="v", s=45,
                        color=color, alpha=0.35, zorder=4)
 
         Fnu_best = _fnu_fitted_R(r["theta_best"], r["free_labels"], nu_grid,
                                   ep["T"], ep["z"], ep["d_L"], fixed,
                                   cfg["therm_el"], cfg["pl_el"])
-        Lnu_best = Fnu_best * Lnu_conv
-        ax.plot(nu_grid, Lnu_best, color=color, lw=2.0)
+        flux_best_uJy = Fnu_best * 1e6
+        ax.plot(nu_grid_disp, flux_best_uJy, color=color, lw=2.0)
 
         ref_slopes = OVERLAY_REFERENCE_SLOPES.get(source, {}).get(r["epoch"])
         if ref_slopes:
@@ -1513,30 +1537,35 @@ def make_sed_overlay_plot(cfg, fixed):
             freq_sorted = np.sort(ep["freq"])
             if len(freq_sorted) >= 2:
                 anchor_x = freq_sorted[-2]
-                anchor_y = _fnu_fitted_R(r["theta_best"], r["free_labels"],
-                                         np.array([anchor_x]), ep["T"], ep["z"],
-                                         ep["d_L"], fixed, cfg["therm_el"],
-                                         cfg["pl_el"])[0] * Lnu_conv
+                anchor_y_uJy = _fnu_fitted_R(r["theta_best"], r["free_labels"],
+                                             np.array([anchor_x]), ep["T"], ep["z"],
+                                             ep["d_L"], fixed, cfg["therm_el"],
+                                             cfg["pl_el"])[0] * 1e6
                 nu_line = nu_grid[nu_grid >= anchor_x]
+                nu_line_disp = nu_line * (1 + z) / 1e9
                 for m in ref_slopes:
-                    ref_curve = anchor_y * (nu_line / anchor_x) ** m
-                    ax.plot(nu_line, ref_curve, color=color, ls="--", lw=1.3,
+                    ref_curve = anchor_y_uJy * (nu_line / anchor_x) ** m
+                    ax.plot(nu_line_disp, ref_curve, color=color, ls="--", lw=1.3,
                             alpha=0.85, label=rf"Power law ($\nu^{{{m}}}$)")
 
-        curves_for_range.append(Lnu_best)
-        flux_for_range.append(flux_true_det)
-        if len(freq_promoted):
-            flux_for_range.append(flux_promoted)
-        if len(freq_nondet):
-            flux_for_range.append(upper_limit_nondet)
+        if len(flux_true_det):
+            detection_flux_uJy.append(flux_true_det)
 
-    all_flux = np.concatenate(flux_for_range)
-    xlim, ylim = natural_xy_limits(nu_grid, curves_for_range,
-                                    freq_data=all_freq, flux_data=all_flux)
-    ax.set_xlim(xlim); ax.set_ylim(ylim)
     ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_xlabel(r"$\nu$ (Hz)")
-    ax.set_ylabel(r"$L_\nu$ (ergs s$^{-1}$ Hz$^{-1}$)")
+
+    # x-limits: exactly the shared fit-curve range, nothing more
+    ax.set_xlim(nu_grid_disp.min(), nu_grid_disp.max())
+
+    # y-limits: padded by whole decades relative to the dimmest/brightest
+    # TRUE detection (not non-detections/promoted points)
+    all_det_flux = np.concatenate(detection_flux_uJy)
+    dimmest, brightest = all_det_flux.min(), all_det_flux.max()
+    y_lo = dimmest / 10 ** 2   # >= 2 decades of room below the dimmest detection
+    y_hi = brightest * 10 ** 3  # >= 3 decades of room above the brightest detection
+    ax.set_ylim(y_lo, y_hi)
+
+    ax.set_xlabel(r"Rest-frame $\nu$ (GHz)")
+    ax.set_ylabel(r"$F_\nu$ ($\mu$Jy)")
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
