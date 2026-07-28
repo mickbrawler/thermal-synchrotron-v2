@@ -1409,7 +1409,7 @@ def make_sed_collage(cfg, fixed):
 # at the frequency of the second-to-last (by frequency) SED point. Purely
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
-    "dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
+    "dbl": {3: [-2.5]},
 }
 
 
@@ -1426,8 +1426,8 @@ def make_sed_overlay_plot(cfg, fixed):
 
     Y-limits: padded by whole DECADES (the standard log-axis major-tick
     unit) relative to the dimmest/brightest true DETECTION (non-detections/
-    promoted-upper-limit points don't count toward this) -- at least 2
-    decades below the dimmest, at least 3 above the brightest.
+    promoted-upper-limit points don't count toward this) -- ~1 decade
+    below the dimmest, ~1 decade above the brightest.
 
     X-limits: set to exactly match the shared fit-curve frequency range
     (same range every epoch's curve is evaluated over), no extra padding
@@ -1560,8 +1560,8 @@ def make_sed_overlay_plot(cfg, fixed):
     # TRUE detection (not non-detections/promoted points)
     all_det_flux = np.concatenate(detection_flux_uJy)
     dimmest, brightest = all_det_flux.min(), all_det_flux.max()
-    y_lo = dimmest / 10 ** 2   # >= 2 decades of room below the dimmest detection
-    y_hi = brightest * 10 ** 3  # >= 3 decades of room above the brightest detection
+    y_lo = dimmest / 10.0   # ~1 decade of room below the dimmest detection
+    y_hi = brightest * 10.0  # ~1 decade of room above the brightest detection
     ax.set_ylim(y_lo, y_hi)
 
     ax.set_xlabel(r"Rest-frame $\nu$ (GHz)")
