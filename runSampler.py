@@ -180,6 +180,8 @@ MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
 MAKE_SED_COLLAGE     = False
 MAKE_SED_OVERLAY     = False
+OVERLAY_YLABEL       = None  # set to a string to show a y-axis label on
+                              # the SED overlay plot; default is no label
 MAKE_SLOPE_COLLAGE   = False
 MAKE_HIGHFREQ_COLLAGE = False
 REPLOT               = False
@@ -1409,26 +1411,24 @@ def make_sed_collage(cfg, fixed):
 # at the frequency of the second-to-last (by frequency) SED point. Purely
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
-    "dbl": {3: [-2.5]},
+    "dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
 }
 
 
 def make_sed_overlay_plot(cfg, fixed):
     """Single-panel alternative to the SED collage: every epoch's data +
     Max Likelihood fit overlaid on one set of axes, colored by time
-    (bluer = earlier/younger, redder = later/older) via a colorbar
-    instead of a per-epoch legend.
+    (bluer = earlier/younger, redder = later/older). Each epoch's fit
+    curve is labeled in the legend with its ACTUAL data time span (e.g.
+    "30-34d"), not the EPOCH_GROUPS bin edges originally specified.
 
-    Axes: y = flux density in uJy (log scale), x = REST-FRAME frequency
-    in GHz (log scale) -- note the model itself is still evaluated at the
-    correct OBSERVED frequency/epoch internally; only the display x-values
-    are converted to rest frame (nu_rest = nu_obs * (1+z)).
+    Axes: y = flux density in uJy (log scale, no label by default -- set
+    cfg["overlay_ylabel"]/--overlay_ylabel to add one), x = REST-FRAME
+    frequency in GHz (log scale) -- note the model itself is still
+    evaluated at the correct OBSERVED frequency/epoch internally; only the
+    display x-values are converted to rest frame (nu_rest = nu_obs*(1+z)).
 
-    Y-limits: padded by whole DECADES (the standard log-axis major-tick
-    unit) relative to the dimmest/brightest true DETECTION (non-detections/
-    promoted-upper-limit points don't count toward this) -- ~5 minor tick
-    marks (~3.59x) below the dimmest, ~3 minor tick marks (~2.15x) above
-    the brightest.
+    Y-limits: fixed at [7.6, 3800] uJy.
 
     X-limits: set to exactly match the shared fit-curve frequency range
     (same range every epoch's curve is evaluated over), no extra padding
@@ -1493,9 +1493,7 @@ def make_sed_overlay_plot(cfg, fixed):
     # rest-frame GHz version of that same grid, for display/x-limits only
     nu_grid_disp = nu_grid * (1 + z) / 1e9
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-
-    detection_flux_uJy = []  # true detections only -- drives y-limit padding
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     for r in records:
         ep = r["ep"]
@@ -1528,7 +1526,10 @@ def make_sed_overlay_plot(cfg, fixed):
                                   ep["T"], ep["z"], ep["d_L"], fixed,
                                   cfg["therm_el"], cfg["pl_el"])
         flux_best_uJy = Fnu_best * 1e6
-        ax.plot(nu_grid_disp, flux_best_uJy, color=color, lw=2.0)
+        # Legend label = the ACTUAL data time span for this epoch (not the
+        # EPOCH_GROUPS bin edges you originally specified), e.g. "30-34d".
+        time_label = f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f}d"
+        ax.plot(nu_grid_disp, flux_best_uJy, color=color, lw=2.0, label=time_label)
 
         ref_slopes = OVERLAY_REFERENCE_SLOPES.get(source, {}).get(r["epoch"])
         if ref_slopes:
@@ -1549,42 +1550,25 @@ def make_sed_overlay_plot(cfg, fixed):
                     ax.plot(nu_line_disp, ref_curve, color=color, ls="--", lw=1.3,
                             alpha=0.85, label=rf"Power law ($\nu^{{{m}}}$)")
 
-        if len(flux_true_det):
-            detection_flux_uJy.append(flux_true_det)
-
     ax.set_xscale("log"); ax.set_yscale("log")
 
     # x-limits: exactly the shared fit-curve range, nothing more
     ax.set_xlim(nu_grid_disp.min(), nu_grid_disp.max())
 
-    # y-limits: padded by whole decades relative to the dimmest/brightest
-    # TRUE detection (not non-detections/promoted points)
-    all_det_flux = np.concatenate(detection_flux_uJy)
-    dimmest, brightest = all_det_flux.min(), all_det_flux.max()
-    y_lo = dimmest / 10.0 ** (5 / 9.0)    # ~5 minor tick marks of room below the dimmest
-                                            # detection (same 9-sub-intervals-per-decade
-                                            # convention as the top padding)
-    y_hi = brightest * 10.0 ** (3 / 9.0)  # ~3 minor tick marks of room above the brightest
-                                            # detection (log-scale minor ticks at 2x..9x
-                                            # divide each decade into 9 sub-intervals, so
-                                            # 3 of those = 10**(3/9) =~ 2.15x, not a full 10x)
-    ax.set_ylim(y_lo, y_hi)
+    # y-limits: fixed per your spec
+    ax.set_ylim([7.6, 3800])
 
-    ax.set_xlabel(r"$\nu_{\rm rest}$ (GHz)", fontsize=15)
-    ax.set_ylabel(r"$F_\nu$ ($\mu$Jy)", fontsize=15)
+    ax.set_xlabel(r"$\nu_{\rm rest}$ (GHz)", fontsize=12)
+    ylabel = cfg.get("overlay_ylabel")
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=12)
     ax.tick_params(axis="both", which="major", labelsize=13)
+    ax.set_xticks([1, 5, 10, 50, 100], ["1", "5", "10", "50", "100"])
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label("Time (days)", fontsize=15)
-    cbar.ax.tick_params(labelsize=13)
-
-    # Only the reference power-law lines (if any were drawn for this
-    # source) carry a `label=`, so this naturally shows just those --
-    # no legend at all for sources/epochs with none configured.
-    if OVERLAY_REFERENCE_SLOPES.get(source):
-        ax.legend(fontsize=12, loc="lower center")
+    # Every epoch's fit curve carries a time-span label, plus any
+    # reference power-law lines -- legend() picks up all of them.
+    ax.legend(loc="upper left", ncols=3, prop={"size": 8}, labelspacing=0.1,
+              handletextpad=0.1, columnspacing=1)
 
     name = SOURCE_DISPLAY_NAMES.get(source, source)
     ax.text(0.97, 0.97, name, transform=ax.transAxes, ha="right", va="top",
@@ -2176,8 +2160,11 @@ def parse_args():
                         "for a source; use with --source/--dir")
     p.add_argument("--make_sed_overlay", action="store_true", default=None,
                    help="single-panel alternative to the SED collage: every "
-                        "epoch overlaid, colored by time via a colorbar "
-                        "(no legend); use with --source/--dir")
+                        "epoch overlaid, colored by time, each labeled in the "
+                        "legend with its actual data time span; use with "
+                        "--source/--dir")
+    p.add_argument("--overlay_ylabel", default=None,
+                   help="y-axis label for the SED overlay plot (default: none)")
     p.add_argument("--make_slope_collage", action="store_true", default=None,
                    help="grid of per-epoch slope-vs-frequency (discrete slopes "
                         "between consecutive SED data points); use with "
@@ -2264,6 +2251,7 @@ def build_config():
         make_evolution_plot = _resolve(cli.make_evolution_plot, MAKE_EVOLUTION_PLOT),
         make_sed_collage = _resolve(cli.make_sed_collage, MAKE_SED_COLLAGE),
         make_sed_overlay = _resolve(cli.make_sed_overlay, MAKE_SED_OVERLAY),
+        overlay_ylabel = _resolve(cli.overlay_ylabel, OVERLAY_YLABEL),
         make_slope_collage = _resolve(cli.make_slope_collage, MAKE_SLOPE_COLLAGE),
         make_highfreq_collage = _resolve(cli.make_highfreq_collage, MAKE_HIGHFREQ_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
