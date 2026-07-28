@@ -1586,7 +1586,10 @@ def make_sed_overlay_plot(cfg, fixed):
     if OVERLAY_REFERENCE_SLOPES.get(source):
         ax.legend(fontsize=12, loc="lower center")
 
-    fig.tight_layout()
+    name = SOURCE_DISPLAY_NAMES.get(source, source)
+    ax.text(0.97, 0.97, name, transform=ax.transAxes, ha="right", va="top",
+            fontsize=14)
+
     outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
     plt.close(fig)
