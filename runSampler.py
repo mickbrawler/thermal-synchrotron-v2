@@ -1426,8 +1426,9 @@ def make_sed_overlay_plot(cfg, fixed):
 
     Y-limits: padded by whole DECADES (the standard log-axis major-tick
     unit) relative to the dimmest/brightest true DETECTION (non-detections/
-    promoted-upper-limit points don't count toward this) -- ~1 decade
-    below the dimmest, ~3 minor tick marks (~2.15x) above the brightest.
+    promoted-upper-limit points don't count toward this) -- ~5 minor tick
+    marks (~3.59x) below the dimmest, ~3 minor tick marks (~2.15x) above
+    the brightest.
 
     X-limits: set to exactly match the shared fit-curve frequency range
     (same range every epoch's curve is evaluated over), no extra padding
@@ -1560,7 +1561,9 @@ def make_sed_overlay_plot(cfg, fixed):
     # TRUE detection (not non-detections/promoted points)
     all_det_flux = np.concatenate(detection_flux_uJy)
     dimmest, brightest = all_det_flux.min(), all_det_flux.max()
-    y_lo = dimmest / 10.0                 # ~1 decade of room below the dimmest detection
+    y_lo = dimmest / 10.0 ** (5 / 9.0)    # ~5 minor tick marks of room below the dimmest
+                                            # detection (same 9-sub-intervals-per-decade
+                                            # convention as the top padding)
     y_hi = brightest * 10.0 ** (3 / 9.0)  # ~3 minor tick marks of room above the brightest
                                             # detection (log-scale minor ticks at 2x..9x
                                             # divide each decade into 9 sub-intervals, so
@@ -1581,7 +1584,7 @@ def make_sed_overlay_plot(cfg, fixed):
     # source) carry a `label=`, so this naturally shows just those --
     # no legend at all for sources/epochs with none configured.
     if OVERLAY_REFERENCE_SLOPES.get(source):
-        ax.legend(fontsize=12, loc="best")
+        ax.legend(fontsize=12, loc="lower center")
 
     fig.tight_layout()
     outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
