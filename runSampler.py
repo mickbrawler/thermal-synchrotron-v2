@@ -1427,7 +1427,7 @@ def make_sed_overlay_plot(cfg, fixed):
     Y-limits: padded by whole DECADES (the standard log-axis major-tick
     unit) relative to the dimmest/brightest true DETECTION (non-detections/
     promoted-upper-limit points don't count toward this) -- ~1 decade
-    below the dimmest, ~1 decade above the brightest.
+    below the dimmest, ~3 minor tick marks (~2.15x) above the brightest.
 
     X-limits: set to exactly match the shared fit-curve frequency range
     (same range every epoch's curve is evaluated over), no extra padding
@@ -1492,7 +1492,7 @@ def make_sed_overlay_plot(cfg, fixed):
     # rest-frame GHz version of that same grid, for display/x-limits only
     nu_grid_disp = nu_grid * (1 + z) / 1e9
 
-    fig, ax = plt.subplots(figsize=(6, 4.5))
+    fig, ax = plt.subplots(figsize=(8, 4.5))
 
     detection_flux_uJy = []  # true detections only -- drives y-limit padding
 
@@ -1560,23 +1560,28 @@ def make_sed_overlay_plot(cfg, fixed):
     # TRUE detection (not non-detections/promoted points)
     all_det_flux = np.concatenate(detection_flux_uJy)
     dimmest, brightest = all_det_flux.min(), all_det_flux.max()
-    y_lo = dimmest / 10.0   # ~1 decade of room below the dimmest detection
-    y_hi = brightest * 10.0  # ~1 decade of room above the brightest detection
+    y_lo = dimmest / 10.0                 # ~1 decade of room below the dimmest detection
+    y_hi = brightest * 10.0 ** (3 / 9.0)  # ~3 minor tick marks of room above the brightest
+                                            # detection (log-scale minor ticks at 2x..9x
+                                            # divide each decade into 9 sub-intervals, so
+                                            # 3 of those = 10**(3/9) =~ 2.15x, not a full 10x)
     ax.set_ylim(y_lo, y_hi)
 
-    ax.set_xlabel(r"Rest-frame $\nu$ (GHz)")
-    ax.set_ylabel(r"$F_\nu$ ($\mu$Jy)")
+    ax.set_xlabel(r"$\nu_{\rm rest}$ (GHz)", fontsize=15)
+    ax.set_ylabel(r"$F_\nu$ ($\mu$Jy)", fontsize=15)
+    ax.tick_params(axis="both", which="major", labelsize=13)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label("Time (days)")
+    cbar.set_label("Time (days)", fontsize=15)
+    cbar.ax.tick_params(labelsize=13)
 
     # Only the reference power-law lines (if any were drawn for this
     # source) carry a `label=`, so this naturally shows just those --
     # no legend at all for sources/epochs with none configured.
     if OVERLAY_REFERENCE_SLOPES.get(source):
-        ax.legend(fontsize=9, loc="best")
+        ax.legend(fontsize=12, loc="best")
 
     fig.tight_layout()
     outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
