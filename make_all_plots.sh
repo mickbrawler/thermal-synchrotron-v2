@@ -6,8 +6,8 @@
 # data, no resampling happens.
 #
 # USAGE:
-#   bash make_all_plots.sh                # everything: both sources, all 13 runs
-#   bash make_all_plots.sh wpp             # wpp only, all 13 runs
+#   bash make_all_plots.sh                # everything: both sources, all 14 runs
+#   bash make_all_plots.sh wpp             # wpp only, all 14 runs
 #   bash make_all_plots.sh wpp run3        # wpp + run3 only
 #   bash make_all_plots.sh "" run3         # both sources, run3 only
 #                                            (empty "" needed to skip SOURCE
@@ -51,10 +51,10 @@ fi
 # run1-5's fixed-param configs (peak-weighting is a FIT-time-only setting,
 # doesn't affect these SED-reconstruction overrides at all). run11 is the
 # new eps_e=1e-4 baseline config.
-RUN_NAMES=(run1 run2 run3 run4 run5 run6 run7 run8 run9 run10 run11 run12 run13)
+RUN_NAMES=(run1 run2 run3 run4 run5 run6 run7 run8 run9 run10 run11 run12 run13 run14)
 RUN_EXTRA_ARGS=("" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01" \
                 "" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01" "--eps_e 1e-4" \
-                "--eps_T 0.4" "--eps_T 0.4")
+                "--eps_T 0.4" "--eps_T 0.4" "--eps_e 1e-4 --therm_el --no-pl_el")
 
 for SOURCE in "${SOURCES[@]}"; do
     for i in "${!RUN_NAMES[@]}"; do
@@ -77,4 +77,4 @@ for SOURCE in "${SOURCES[@]}"; do
     done
 done
 
-echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit/knob plots regenerated (run1-run11)."
+echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit/knob plots regenerated (run1-run14)."
