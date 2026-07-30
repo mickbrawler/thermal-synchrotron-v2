@@ -166,6 +166,16 @@ FLUX_ERR_FLOOR_FRAC = 0.10    # 10% error floor
 # the axis limits, so the lines always reach the plot edges (no dead margin).
 SED_PAD_DEX = 0.15
 
+# --- optional chi2 weighting for points past an epoch's empirical SED
+# peak (the data's own peak flux, not anything model-dependent). Off by
+# default -- turn on with --chi2_weight_post_peak or set True here. Only
+# affects the FIT (log_prob_fitted_R); plots/eflux/error bars elsewhere
+# are completely unaffected, this never touches the actual stored data. ---
+CHI2_WEIGHT_POST_PEAK = False
+CHI2_POST_PEAK_WEIGHT = 3.0   # chi2 multiplier applied to those points
+                                # when the above is True -- tune via
+                                # --chi2_post_peak_weight
+
 # --- output ---
 OUTDIR  = "./mcmc_output"
 RUN_TAG = "1"            # subdirectory label, a la your old SLURM $DIR;
@@ -178,6 +188,7 @@ RESUME  = False            # if True, continue an existing chain (same
 TIME_ONLY           = False
 MAKE_EVOLUTION_PLOT = False
 MAKE_KNOB_PLOT       = False
+MAKE_ALL_KNOB_PLOTS  = False
 MAKE_SED_COLLAGE     = False
 MAKE_SED_OVERLAY     = False
 OVERLAY_YLABEL       = None  # set to a string to show a y-axis label on
@@ -415,7 +426,8 @@ def check_fixed_params_match(config_path, current_fixed, tol=1e-8):
 
 
 def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
-                        free_labels=None):
+                        free_labels=None, chi2_weight_post_peak=None,
+                        chi2_post_peak_weight=None):
     free_keys = set()
     if free_labels:
         free_keys = {(lab[5:] if lab.startswith("log10") else lab)
@@ -427,8 +439,11 @@ def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
         if k in free_keys:
             continue  # this one is free for this run -- listed below instead
         lines.append(f"  {k:8s} = {v}")
-    lines += ["", "therm_el = " + str(therm_el), "pl_el    = " + str(pl_el),
-              "", "Free parameters (uniform priors):"]
+    lines += ["", "therm_el = " + str(therm_el), "pl_el    = " + str(pl_el)]
+    if chi2_weight_post_peak is not None:
+        lines.append(f"chi2_weight_post_peak = {chi2_weight_post_peak}"
+                     + (f" (factor={chi2_post_peak_weight})" if chi2_weight_post_peak else ""))
+    lines += ["", "Free parameters (uniform priors):"]
     if free_labels:
         for lab in free_labels:
             lo, hi = priors[lab]
@@ -816,7 +831,7 @@ def _fnu_fitted_R(theta, labels, freq, T, z, d_L, fixed, therm_el, pl_el):
 
 
 def log_prob_fitted_R(theta, freq, flux, eflux, T, z, d_L, fixed,
-                       therm_el, pl_el, bounds, labels):
+                       therm_el, pl_el, bounds, labels, weights):
     lp = log_prior_box(theta, labels, bounds)
     if not np.isfinite(lp):
         return -np.inf
@@ -837,7 +852,7 @@ def log_prob_fitted_R(theta, freq, flux, eflux, T, z, d_L, fixed,
             p["mu_u"], p["mu_e"], p["BG"], p["k"], d_L, z,
             therm_el=therm_el, pl_el=pl_el,
         ) / (4.0 * np.pi * d_L ** 2) / C.Jy
-        chi2 = np.sum(((flux - Fnu_model) / eflux) ** 2)
+        chi2 = np.sum(weights * ((flux - Fnu_model) / eflux) ** 2)
         ll = -0.5 * chi2
     except Exception:
         return -np.inf
@@ -845,6 +860,20 @@ def log_prob_fitted_R(theta, freq, flux, eflux, T, z, d_L, fixed,
     if not np.isfinite(ll):
         return -np.inf
     return lp + ll
+
+
+def compute_post_peak_weights(freq, flux, enabled, weight_factor):
+    """Per-point chi2 weight array: 1.0 everywhere, except weight_factor
+    for any point at a frequency ABOVE the epoch's own empirical peak
+    flux (i.e. the observed data's peak, not anything model-dependent --
+    this must stay fixed throughout sampling, not shift around with theta,
+    or the likelihood wouldn't be well-defined as a fixed target
+    distribution). No-op (all 1.0) if `enabled` is False."""
+    weights = np.ones_like(freq, dtype=float)
+    if enabled and len(freq) > 0:
+        peak_freq = freq[np.argmax(flux)]
+        weights[freq > peak_freq] = weight_factor
+    return weights
 
 
 def _fnu_dynamical(theta, freq, T, z, d_L, fixed, therm_el, pl_el):
@@ -1411,8 +1440,13 @@ def make_sed_collage(cfg, fixed):
 # at the frequency of the second-to-last (by frequency) SED point. Purely
 # a visual comparison aid -- add more (source, epoch) entries as needed. ---
 OVERLAY_REFERENCE_SLOPES = {
-    "dbl": {3: [-1.0, -1.5, -2.0, -2.5, -3.0]},
+    "dbl": {3: [-2.5]},
 }
+
+# Fixed lower x-axis bound (rest-frame GHz) for the SED overlay plot --
+# the fit curves are evaluated all the way down to this point too, so
+# there's no dead margin between the lines and the axis edge.
+OVERLAY_XLIM_LO_GHZ_REST = 10.0
 
 
 def make_sed_overlay_plot(cfg, fixed):
@@ -1484,16 +1518,20 @@ def make_sed_overlay_plot(cfg, fixed):
     cmap = plt.get_cmap("coolwarm")  # blue (low/young) -> red (high/old)
     norm = plt.Normalize(vmin=times.min(), vmax=times.max())
 
-    # shared OBSERVED-frame nu_grid, same range for every epoch's curve
+    # shared OBSERVED-frame nu_grid, same range for every epoch's curve.
+    # Lower bound fixed at OVERLAY_XLIM_LO_GHZ_REST (rest-frame GHz),
+    # converted down to the equivalent observed-frame Hz value so the fit
+    # curves are actually evaluated (and thus drawn) all the way down to
+    # that point -- no dead margin between the curve and the axis edge.
     all_freq = np.concatenate(all_freq_list)
-    log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
-    nu_grid_lo = 10 ** (log_flo - SED_PAD_DEX)
+    log_fhi = np.log10(all_freq.max())
+    nu_grid_lo = (OVERLAY_XLIM_LO_GHZ_REST * 1e9) / (1 + z)
     nu_grid_hi = 10 ** (log_fhi + SED_PAD_DEX)
     nu_grid = np.logspace(np.log10(nu_grid_lo), np.log10(nu_grid_hi), 500)
     # rest-frame GHz version of that same grid, for display/x-limits only
     nu_grid_disp = nu_grid * (1 + z) / 1e9
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(8, 4.5))
 
     for r in records:
         ep = r["ep"]
@@ -1528,7 +1566,7 @@ def make_sed_overlay_plot(cfg, fixed):
         flux_best_uJy = Fnu_best * 1e6
         # Legend label = the ACTUAL data time span for this epoch (not the
         # EPOCH_GROUPS bin edges you originally specified), e.g. "30-34d".
-        time_label = f"{ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f}d"
+        time_label = f" {ep['t_rest_min']:.0f}-{ep['t_rest_max']:.0f}d"
         ax.plot(nu_grid_disp, flux_best_uJy, color=color, lw=2.0, label=time_label)
 
         ref_slopes = OVERLAY_REFERENCE_SLOPES.get(source, {}).get(r["epoch"])
@@ -1558,16 +1596,16 @@ def make_sed_overlay_plot(cfg, fixed):
     # y-limits: fixed per your spec
     ax.set_ylim([7.6, 3800])
 
-    ax.set_xlabel(r"$\nu_{\rm rest}$ (GHz)", fontsize=12)
+    ax.set_xlabel(r"$\nu_{\rm rest}$ (GHz)", fontsize=16)
     ylabel = cfg.get("overlay_ylabel")
     if ylabel:
-        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=16)
     ax.tick_params(axis="both", which="major", labelsize=13)
-    ax.set_xticks([1, 5, 10, 50, 100], ["1", "5", "10", "50", "100"])
+    ax.set_xticks([10, 50, 100], ["10", "50", "100"])
 
     # Every epoch's fit curve carries a time-span label, plus any
     # reference power-law lines -- legend() picks up all of them.
-    ax.legend(loc="upper left", ncols=3, prop={"size": 8}, labelspacing=0.1,
+    ax.legend(loc="lower center", ncols=1, prop={"size": 10}, labelspacing=0.1,
               handletextpad=0.1, columnspacing=1)
 
     name = SOURCE_DISPLAY_NAMES.get(source, source)
@@ -1575,7 +1613,12 @@ def make_sed_overlay_plot(cfg, fixed):
             fontsize=14)
 
     outpath = os.path.join(plots_rundir, f"{source}_sed_overlay.png")
-    fig.savefig(outpath, dpi=130, bbox_inches="tight")
+    # Explicit margins (not tight_layout/bbox_inches="tight") so every
+    # save comes out at EXACTLY the (8, 4.5) canvas size regardless of
+    # content, while still leaving enough room that labels/ticks don't
+    # get clipped at these font sizes.
+    fig.subplots_adjust(left=0.09, right=0.98, bottom=0.15, top=0.95)
+    fig.savefig(outpath, dpi=450)
     plt.close(fig)
     print(f"    saved -> {outpath}")
 
@@ -1850,7 +1893,7 @@ def _eval_knob_sed(nu, params, T, z, d_L, therm_el, pl_el):
     return Lnu / (4.0 * np.pi * d_L ** 2) / C.Jy
 
 
-def make_knob_plot(cfg):
+def make_knob_plot(cfg, output_dir=None, filename_prefix=None):
     variant = cfg["knob_variant"]
     if variant == "pl_only":
         therm_el, pl_el = False, True
@@ -1926,12 +1969,51 @@ def make_knob_plot(cfg):
                  f"(T={T:.1f}d, {center_note})", y=1.01)
     fig.tight_layout()
 
-    plots_dir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+    plots_dir = output_dir or os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
     os.makedirs(plots_dir, exist_ok=True)
-    outpath = os.path.join(plots_dir, f"knob_plot_{cfg['knob_source']}_{variant_suffix}.png")
+    prefix = filename_prefix or f"knob_plot_{cfg['knob_source']}"
+    outpath = os.path.join(plots_dir, f"{prefix}_{variant_suffix}.png")
     fig.savefig(outpath, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"    saved -> {outpath}")
+
+
+def make_all_knob_plots(cfg):
+    """Runs the knob/dials plot for EVERY epoch that already has a saved
+    fitted_R result for cfg['source'], each centered on that epoch's own
+    best fit (like --knob_from_summary, just automatic), producing all 3
+    variants (combined, pl_only, therm_only) per epoch. Output goes into
+    a 'knobs/' subfolder inside that epoch's own plots directory, e.g.
+    mcmc_output/plots/run1/wpp_fittedR_ep3/knobs/knob_plot_wpp_ep3_combined.png
+    -- so everything for one epoch lives together."""
+    source = cfg["source"]
+    data_rundir = os.path.join(cfg["outdir"], "data", cfg["run_tag"])
+    plots_rundir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"])
+
+    pattern = os.path.join(data_rundir, f"{source}_fittedR_ep*",
+                            f"{source}_fittedR_ep*_summary.csv")
+    files = sorted(glob.glob(pattern),
+                   key=lambda f: int(re.search(r"ep(\d+)_summary", f).group(1)))
+    if not files:
+        raise FileNotFoundError(
+            f"No per-epoch summaries found matching {pattern}. "
+            f"Run MODE='fitted_R' for each epoch of '{source}' first."
+        )
+
+    for f in files:
+        epoch_idx = int(re.search(r"ep(\d+)_summary", f).group(1))
+        tag = f"{source}_fittedR_ep{epoch_idx}"
+        knobs_dir = os.path.join(plots_rundir, tag, "knobs")
+
+        epoch_cfg = dict(cfg)
+        epoch_cfg["knob_source"] = source
+        epoch_cfg["knob_from_summary"] = f
+
+        print(f"  -- {tag} --")
+        for variant in ["combined", "pl_only", "therm_only"]:
+            epoch_cfg["knob_variant"] = variant
+            make_knob_plot(epoch_cfg, output_dir=knobs_dir,
+                           filename_prefix=f"knob_plot_{source}_ep{epoch_idx}")
 
 
 # =====================================================================
@@ -1955,8 +2037,15 @@ def run_fitted_R(source, epoch_idx, cfg, fixed):
     labels = cfg["free_params_fitted_R"]
     priors = cfg["priors_fitted_R"]
     ep = get_epoch_data(source, epoch_idx)
+    weights = compute_post_peak_weights(ep["freq"], ep["flux"],
+                                        cfg["chi2_weight_post_peak"],
+                                        cfg["chi2_post_peak_weight"])
+    if cfg["chi2_weight_post_peak"]:
+        n_weighted = int(np.sum(weights > 1.0))
+        print(f"    chi2 post-peak weighting ON: {n_weighted}/{len(weights)} "
+              f"points above the empirical peak get x{cfg['chi2_post_peak_weight']} weight")
     args = (ep["freq"], ep["flux"], ep["eflux"], ep["T"], ep["z"], ep["d_L"],
-             fixed, cfg["therm_el"], cfg["pl_el"], priors, labels)
+             fixed, cfg["therm_el"], cfg["pl_el"], priors, labels, weights)
 
     if cfg["time_only"]:
         t_eval = time_single_eval(log_prob_fitted_R, args, labels, priors)
@@ -1974,7 +2063,9 @@ def run_fitted_R(source, epoch_idx, cfg, fixed):
     os.makedirs(plots_dir, exist_ok=True)
 
     save_run_config_txt(plots_dir, tag, fixed, priors,
-                        cfg["therm_el"], cfg["pl_el"], free_labels=labels)
+                        cfg["therm_el"], cfg["pl_el"], free_labels=labels,
+                        chi2_weight_post_peak=cfg["chi2_weight_post_peak"],
+                        chi2_post_peak_weight=cfg["chi2_post_peak_weight"])
 
     sampler = run_sampler(tag, data_dir, len(labels), labels, priors,
                            log_prob_fitted_R, args, cfg)
@@ -2179,6 +2270,11 @@ def parse_args():
                         "(no resampling); use with --source/--mode/--epoch/--dir "
                         "same as the original run")
     p.add_argument("--make_knob_plot", action="store_true", default=None)
+    p.add_argument("--make_all_knob_plots", action="store_true", default=None,
+                   help="runs all 3 knob-plot variants (combined/pl_only/"
+                        "therm_only) for EVERY epoch fit of --source, each "
+                        "centered on that epoch's own best fit, saved into "
+                        "that epoch's own plots/.../knobs/ subfolder")
     p.add_argument("--knob_source", default=None, choices=["wpp", "dbl"])
     p.add_argument("--knob_T", type=float, default=None)
     p.add_argument("--knob_from_summary", default=None,
@@ -2191,6 +2287,18 @@ def parse_args():
     p.add_argument("--no-therm_el", dest="therm_el", action="store_false")
     p.add_argument("--pl_el", dest="pl_el", action="store_true", default=None)
     p.add_argument("--no-pl_el", dest="pl_el", action="store_false")
+
+    # chi2 weighting for SED points past an epoch's empirical peak (fit
+    # only -- never touches stored eflux/error bars/plots elsewhere)
+    p.add_argument("--chi2_weight_post_peak", dest="chi2_weight_post_peak",
+                   action="store_true", default=None,
+                   help="upweight chi2 contribution of points above each "
+                        "epoch's own empirical peak flux frequency")
+    p.add_argument("--no-chi2_weight_post_peak", dest="chi2_weight_post_peak",
+                   action="store_false")
+    p.add_argument("--chi2_post_peak_weight", type=float, default=None,
+                   help="chi2 multiplier for post-peak points when the above "
+                        "is on (default: 3.0)")
 
     # fixed (non-fit) microphysical param overrides -- lets you launch
     # different configs (run2, run3, ...) without editing FIXED_PARAMS
@@ -2256,6 +2364,7 @@ def build_config():
         make_highfreq_collage = _resolve(cli.make_highfreq_collage, MAKE_HIGHFREQ_COLLAGE),
         replot      = _resolve(cli.replot, REPLOT),
         make_knob_plot = _resolve(cli.make_knob_plot, MAKE_KNOB_PLOT),
+        make_all_knob_plots = _resolve(cli.make_all_knob_plots, MAKE_ALL_KNOB_PLOTS),
         knob_source = _resolve(cli.knob_source, KNOB_SOURCE),
         knob_T = _resolve(cli.knob_T, KNOB_T),
         knob_from_summary = _resolve(cli.knob_from_summary, KNOB_FROM_SUMMARY),
@@ -2263,6 +2372,8 @@ def build_config():
         knob_variant = _resolve(cli.knob_variant, KNOB_VARIANT),
         therm_el    = _resolve(cli.therm_el, THERM_EL),
         pl_el       = _resolve(cli.pl_el, PL_EL),
+        chi2_weight_post_peak = _resolve(cli.chi2_weight_post_peak, CHI2_WEIGHT_POST_PEAK),
+        chi2_post_peak_weight = _resolve(cli.chi2_post_peak_weight, CHI2_POST_PEAK_WEIGHT),
         check_convergence       = CHECK_CONVERGENCE,
         convergence_check_every = CONVERGENCE_CHECK_EVERY,
         convergence_ntau        = CONVERGENCE_NTAU,
@@ -2301,6 +2412,10 @@ def main():
 
     if cfg["make_knob_plot"]:
         make_knob_plot(cfg)
+        return
+
+    if cfg["make_all_knob_plots"]:
+        make_all_knob_plots(cfg)
         return
 
     if cfg["replot"]:

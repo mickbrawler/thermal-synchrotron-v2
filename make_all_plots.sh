@@ -6,12 +6,22 @@
 # data, no resampling happens.
 #
 # USAGE:
-#   bash make_all_plots.sh                # everything: both sources, all 5 runs
-#   bash make_all_plots.sh wpp             # wpp only, all 5 runs
+#   bash make_all_plots.sh                # everything: both sources, all 13 runs
+#   bash make_all_plots.sh wpp             # wpp only, all 13 runs
 #   bash make_all_plots.sh wpp run3        # wpp + run3 only
 #   bash make_all_plots.sh "" run3         # both sources, run3 only
 #                                            (empty "" needed to skip SOURCE
 #                                            while still specifying RUN)
+#
+#   SKIP_KNOBS=1 bash make_all_plots.sh    # skip the knob/dials plots --
+#                                            by far the slowest step (351
+#                                            images across the full 13-run
+#                                            sweep, ~20k model evaluations)
+#                                            since every epoch gets 3
+#                                            variants, each a 12-panel
+#                                            figure. Combine with the
+#                                            filters above too, e.g.:
+#   SKIP_KNOBS=1 bash make_all_plots.sh "" run12
 #
 # NOTE: SED collage/overlay reconstruct the SED using whatever's currently
 # passed as fixed params for anything that WASN'T free in that run -- so
@@ -20,8 +30,8 @@
 # profile plots never need this since they're read straight from each
 # epoch's saved posterior summary. The slope collage and high-frequency
 # collage don't need it either (or any fit at all) -- they're pure data,
-# so they come out identical across run1-5; they're just regenerated into
-# each run's own plot folder for convenience.
+# so they come out identical across all runs; they're just regenerated
+# into each run's own plot folder for convenience.
 
 set -e  # stop immediately if any command fails, rather than plowing on
 
@@ -36,8 +46,15 @@ fi
 
 # parallel arrays: run name <-> its fixed-param override (matching what
 # that run's actual fit used away from the run1 defaults)
-RUN_NAMES=(run1 run2 run3 run4 run5)
-RUN_EXTRA_ARGS=("" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01")
+# parallel arrays: run name <-> its fixed-param override (matching what
+# that run's actual fit used away from the run1 defaults). run6-10 mirror
+# run1-5's fixed-param configs (peak-weighting is a FIT-time-only setting,
+# doesn't affect these SED-reconstruction overrides at all). run11 is the
+# new eps_e=1e-4 baseline config.
+RUN_NAMES=(run1 run2 run3 run4 run5 run6 run7 run8 run9 run10 run11 run12 run13)
+RUN_EXTRA_ARGS=("" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01" \
+                "" "--eps_B 0.01" "--eps_e 0.01" "" "--eps_e 0.01" "--eps_e 1e-4" \
+                "--eps_T 0.4" "--eps_T 0.4")
 
 for SOURCE in "${SOURCES[@]}"; do
     for i in "${!RUN_NAMES[@]}"; do
@@ -54,7 +71,10 @@ for SOURCE in "${SOURCES[@]}"; do
         python runSampler.py --make_sed_overlay      --source "$SOURCE" --dir "$RUN" $EXTRA
         python runSampler.py --make_slope_collage    --source "$SOURCE" --dir "$RUN"
         python runSampler.py --make_highfreq_collage --source "$SOURCE" --dir "$RUN"
+        if [ "$SKIP_KNOBS" != "1" ]; then
+            python runSampler.py --make_all_knob_plots --source "$SOURCE" --dir "$RUN" $EXTRA
+        fi
     done
 done
 
-echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit plots regenerated."
+echo "Done -- all evolution/density-profile/SED-collage/SED-overlay/slope-collage/highfreq-fit/knob plots regenerated (run1-run11)."
