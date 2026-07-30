@@ -14,7 +14,7 @@ Fixed (non-fit) parameters:
 
 therm_el = True
 pl_el    = True
-chi2_weight_post_peak = True (factor=3.0)
+chi2_weight_post_peak = True (factor=10.0)
 
 Free parameters (uniform priors):
   a            : (0.5, 4.0)

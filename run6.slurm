@@ -19,12 +19,13 @@ NWALKERS=24
 NSAMPLES=1e5
 NCORES=$SLURM_CPUS_PER_TASK
 RUNTAG="run6"
-RESUME="--resume"
+RESUME=""
 
 # ---- run6: same as run1 (defaults: eps_B=0.1, eps_e=0.1), but with
 #            post-peak chi2 weighting ON (factor=3.0 default -- add
 #            --chi2_post_peak_weight <value> here to change it) ----
-EXTRA_ARGS="--chi2_weight_post_peak"
+EXTRA_ARGS="--chi2_weight_post_peak --chi2_post_peak_weight 10"
+
 
 mkdir -p logs
 

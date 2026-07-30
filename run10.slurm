@@ -19,11 +19,11 @@ NWALKERS=24
 NSAMPLES=1e5
 NCORES=$SLURM_CPUS_PER_TASK
 RUNTAG="run10"
-RESUME="--resume"
+RESUME=""
 
 # ---- run10: same as run5 (eps_B free + eps_e fixed at 0.01), but with
 #             post-peak chi2 weighting ON ----
-EXTRA_ARGS="--free_params a,log10R,BG,log10n0,log10eps_B --eps_e 0.01 --chi2_weight_post_peak"
+EXTRA_ARGS="--free_params a,log10R,BG,log10n0,log10eps_B --eps_e 0.01 --chi2_weight_post_peak --chi2_post_peak_weight 10"
 
 mkdir -p logs
 
