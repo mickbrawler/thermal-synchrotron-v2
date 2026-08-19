@@ -116,6 +116,10 @@ FIXED_PARAMS = dict(
     mu_e   = 1.18,
     k      = 0.0,     # power-law index for stratified density (0=uniform)
     eps_B  = 0.1,     # fraction of energy in B-field -- FIXED. try 0.01 too
+    alpha  = 1.0,     # deceleration index -- INERT/unused for fitted_R
+                       # (its signature accepts alpha but never uses it),
+                       # meaningful for dynamical mode and the new
+                       # multi_epoch mode below (where it's normally FREE)
 )
 
 # --- which parameters are FREE in fitted_R mode (edit this to change
@@ -159,6 +163,39 @@ PRIORS_DYNAMICAL = dict(
     alpha   = (0.0, 3.0),
     log10n0 = (-2.0, 6.0),
 )
+
+# --- multi_epoch mode: joint fit across ALL epochs of a source at once,
+# using LOS_IHG_MULTI_EPOCH. Like 'dynamical' mode, R(t) is DERIVED (not
+# fit directly) from a shared deceleration law -- but via one
+# scipy.optimize.root_scalar solve per epoch (through the new R0()/
+# radius_implicit_calc() helpers), not the ~8000-100000-per-epoch EATS
+# integral Shell.py/L_ELOS_IHG needs -- i.e. this should make joint
+# dynamical-style fitting actually practical speed-wise. Free params
+# default to a, log10n0, pv_ref (proper velocity at the reference
+# epoch/radius -- same ROLE as BG/BG0 before), and alpha (the new
+# deceleration index) -- there's no log10R-equivalent free parameter
+# since R is derived at every epoch from this shared law. ---
+FREE_PARAMS_MULTI_EPOCH = ["a", "log10n0", "pv_ref", "alpha"]
+
+PRIORS_MULTI_EPOCH = dict(
+    a       = (0.5, 4.0),
+    log10n0 = (-2.0, 6.0),
+    pv_ref  = (0.01, 2.10),
+    alpha   = (0.1, 3.0),    # placeholder -- tune this
+)
+
+# Reference radius (log10 cm) at which pv_ref is defined. float('inf')
+# (default) auto-derives it from pv_ref/alpha and the EARLIEST epoch's own
+# time -- the natural choice matching "R is derived, not fit". Set to a
+# specific log10(cm) value instead via --multi_logR_dec to anchor pv_ref
+# at a radius you choose rather than the first epoch.
+MULTI_EPOCH_LOGR_DEC = float("inf")
+
+# 'pl' (pure power-law deceleration, no coasting phase) or 'decel'
+# (includes an initial coasting phase before deceleration sets in) --
+# your call which is more physically appropriate; defaulting to 'decel'
+# as the more general choice. Override via --multi_pv_form.
+MULTI_EPOCH_PV_FORM = "decel"
 
 # --- data handling ---
 SNR_THRESHOLD       = 3.0
@@ -322,6 +359,8 @@ def pretty_title(source, mode, epoch=None):
     name = SOURCE_DISPLAY_NAMES.get(source, source)
     if mode == "fitted_R":
         return f"{name} Epoch {epoch}"
+    if mode == "multi_epoch":
+        return f"{name} Joint Multi-Epoch Fit (All Epochs)"
     return f"{name} Joint Fit (All Epochs)"
 
 
@@ -844,7 +883,7 @@ def _fnu_fitted_R(theta, labels, freq, T, z, d_L, fixed, therm_el, pl_el):
     Lnu = flux_variables.LOS_IHG_Fitted_R(
         freq, p["s"], p["a"], p["delta"], p["R"], T, p["n0"],
         p["eps_e"], p["eps_B"], p["eps_T"], p["p"],
-        p["mu_u"], p["mu_e"], p["BG"], p["k"], d_L, z,
+        p["mu_u"], p["mu_e"], p["BG"], p["k"], p["alpha"], d_L, z,
         therm_el=therm_el, pl_el=pl_el,
     )
     return Lnu / (4.0 * np.pi * d_L ** 2) / C.Jy
@@ -869,7 +908,7 @@ def log_prob_fitted_R(theta, freq, flux, eflux, T, z, d_L, fixed,
         Fnu_model = flux_variables.LOS_IHG_Fitted_R(
             freq, p["s"], p["a"], p["delta"], p["R"], T, p["n0"],
             p["eps_e"], p["eps_B"], p["eps_T"], p["p"],
-            p["mu_u"], p["mu_e"], p["BG"], p["k"], d_L, z,
+            p["mu_u"], p["mu_e"], p["BG"], p["k"], p["alpha"], d_L, z,
             therm_el=therm_el, pl_el=pl_el,
         ) / (4.0 * np.pi * d_L ** 2) / C.Jy
         chi2 = np.sum(weights * ((flux - Fnu_model) / eflux) ** 2)
@@ -922,6 +961,100 @@ def log_prob_dynamical(theta, epochs, fixed, therm_el, pl_el, bounds):
             Fnu_model = _fnu_dynamical(theta, ep["freq"], ep["T"], ep["z"],
                                         ep["d_L"], fixed, therm_el, pl_el)
             chi2_total += np.sum(((ep["flux"] - Fnu_model) / ep["eflux"]) ** 2)
+        ll = -0.5 * chi2_total
+    except Exception:
+        return -np.inf
+
+    if not np.isfinite(ll):
+        return -np.inf
+    return lp + ll
+
+
+# =====================================================================
+# MULTI_EPOCH MODE (joint fit via LOS_IHG_MULTI_EPOCH)
+# =====================================================================
+# Like 'dynamical' mode, R(t) is DERIVED from a shared deceleration law
+# across ALL epochs of a source at once -- but LOS_IHG_MULTI_EPOCH evaluates
+# every epoch's R(t) via one scipy.optimize.root_scalar solve each (through
+# R0()/radius_implicit_calc()), not the ~8000-100000-per-epoch EATS
+# integral Shell.py/L_ELOS_IHG needs.
+#
+# Calling convention is different from every other mode here: rather than
+# evaluating one epoch's flux at a time, LOS_IHG_MULTI_EPOCH takes a SHARED
+# frequency array and a FULL array of epoch times, returning a
+# (n_epoch, n_freq) grid in one call -- required for correctness, not just
+# convenience, since R_ref is computed once (referenced to the EARLIEST
+# epoch when logR_dec=inf) and must be shared consistently across every
+# other epoch's R(t) solve within that same likelihood evaluation.
+
+def get_multi_epoch_data(source):
+    """Gathers ALL epochs of a source for joint multi_epoch fitting, sorted
+    by T ascending -- index 0 is the EARLIEST epoch (the reference epoch
+    when logR_dec=inf). Builds a shared, deduplicated frequency array
+    (nu_unique) across every epoch's own observed frequencies, plus an
+    index mapping from each epoch's own freq array into nu_unique (exact
+    match, since nu_unique is built directly from the real data)."""
+    all_epochs = get_all_epochs(source)
+    # drop any epoch with zero data (or a NaN T, e.g. from a fully-excluded
+    # non-detection epoch) -- can't contribute to a joint fit and would
+    # corrupt the R_ref/reference-epoch logic if included
+    epochs = [ep for ep in all_epochs if len(ep["freq"]) > 0 and np.isfinite(ep["T"])]
+    if not epochs:
+        raise ValueError(f"No epochs with usable data found for source '{source}'")
+    epochs = sorted(epochs, key=lambda ep: ep["T"])
+
+    T_array = np.array([ep["T"] for ep in epochs])
+    nu_unique = np.unique(np.concatenate([ep["freq"] for ep in epochs]))
+    freq_idx_per_epoch = [np.searchsorted(nu_unique, ep["freq"]) for ep in epochs]
+
+    return dict(epochs=epochs, T_array=T_array, nu_unique=nu_unique,
+                freq_idx_per_epoch=freq_idx_per_epoch,
+                z=epochs[0]["z"], d_L=epochs[0]["d_L"])
+
+
+def _fnu_multi_epoch_grid(theta, labels, multi_data, fixed, logR_dec, pv_form,
+                          therm_el, pl_el):
+    """Evaluates LOS_IHG_MULTI_EPOCH once over multi_data['nu_unique'] and
+    multi_data['T_array']. Returns the full (n_epoch, n_freq) flux grid in
+    Jy (not luminosity), plus the params dict used and the per-epoch BG
+    array LOS_IHG_MULTI_EPOCH also returns."""
+    p = _build_theta_params(theta, labels, fixed)
+    L_avg, BG = flux_variables.LOS_IHG_MULTI_EPOCH(
+        multi_data["nu_unique"], logR_dec, p["s"], p["a"], p["delta"],
+        multi_data["T_array"], p["n0"], p["eps_e"], p["eps_B"], p["eps_T"],
+        p["p"], p["mu_u"], p["mu_e"], p["pv_ref"], p["k"], p["alpha"],
+        multi_data["d_L"], multi_data["z"], pv_form,
+        therm_el=therm_el, pl_el=pl_el,
+    )
+    Fnu_grid_Jy = L_avg / (4.0 * np.pi * multi_data["d_L"] ** 2) / C.Jy
+    return Fnu_grid_Jy, BG, p
+
+
+def log_prob_multi_epoch(theta, multi_data, fixed, therm_el, pl_el, bounds,
+                          labels, logR_dec, pv_form):
+    lp = log_prior_box(theta, labels, bounds)
+    if not np.isfinite(lp):
+        return -np.inf
+
+    p = _build_theta_params(theta, labels, fixed)
+    if not (0.5 < p["a"] < _a_upper_bound(p["p"], p["delta"])):
+        return -np.inf
+    if p["eps_e"] + p["eps_B"] + p["eps_T"] > 1.0:
+        return -np.inf
+
+    try:
+        L_avg, BG = flux_variables.LOS_IHG_MULTI_EPOCH(
+            multi_data["nu_unique"], logR_dec, p["s"], p["a"], p["delta"],
+            multi_data["T_array"], p["n0"], p["eps_e"], p["eps_B"], p["eps_T"],
+            p["p"], p["mu_u"], p["mu_e"], p["pv_ref"], p["k"], p["alpha"],
+            multi_data["d_L"], multi_data["z"], pv_form,
+            therm_el=therm_el, pl_el=pl_el,
+        )
+        chi2_total = 0.0
+        for i, ep in enumerate(multi_data["epochs"]):
+            idx = multi_data["freq_idx_per_epoch"][i]
+            Fnu_model_Jy = L_avg[i, idx] / (4.0 * np.pi * multi_data["d_L"] ** 2) / C.Jy
+            chi2_total += np.sum(((ep["flux"] - Fnu_model_Jy) / ep["eflux"]) ** 2)
         ll = -0.5 * chi2_total
     except Exception:
         return -np.inf
@@ -1907,7 +2040,8 @@ def _eval_knob_sed(nu, params, T, z, d_L, therm_el, pl_el):
     Lnu = flux_variables.LOS_IHG_Fitted_R(
         nu, params["s"], params["a"], params["delta"], R, T, n0,
         params["eps_e"], params["eps_B"], params["eps_T"], params["p"],
-        params["mu_u"], params["mu_e"], params["BG"], params["k"], d_L, z,
+        params["mu_u"], params["mu_e"], params["BG"], params["k"],
+        params["alpha"], d_L, z,
         therm_el=therm_el, pl_el=pl_el,
     )
     return Lnu / (4.0 * np.pi * d_L ** 2) / C.Jy
@@ -2132,6 +2266,112 @@ def run_dynamical(source, cfg, fixed):
                         cfg["therm_el"], cfg["pl_el"])
 
 
+def plot_sed_multi_epoch(plots_dir, tag, title_str, multi_data, fixed, labels,
+                         logR_dec, pv_form, flat, flat_lp, therm_el, pl_el,
+                         n_draws=40):
+    epochs = multi_data["epochs"]
+    ncols = min(3, len(epochs))
+    nrows = int(np.ceil(len(epochs) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+                              constrained_layout=True)
+    ax_flat = np.atleast_1d(axes).reshape(-1)
+
+    # Shared smooth nu_grid spanning the union of all epochs' frequencies --
+    # a NEW multi_data dict reusing the same T_array (for R_ref
+    # self-consistency) but this smooth grid instead of nu_unique.
+    all_freq = np.concatenate([ep["freq"] for ep in epochs])
+    log_flo, log_fhi = np.log10(all_freq.min()), np.log10(all_freq.max())
+    nu_grid = np.logspace(log_flo - SED_PAD_DEX, log_fhi + SED_PAD_DEX, 300)
+    plot_multi_data = dict(multi_data)
+    plot_multi_data["nu_unique"] = nu_grid
+
+    idx = np.random.choice(len(flat), size=min(n_draws, len(flat)), replace=False)
+    best = flat[np.argmax(flat_lp)]
+
+    Fnu_best_grid, _, _ = _fnu_multi_epoch_grid(best, labels, plot_multi_data,
+                                                fixed, logR_dec, pv_form,
+                                                therm_el, pl_el)
+    draw_grids = []
+    for i in idx:
+        g, _, _ = _fnu_multi_epoch_grid(flat[i], labels, plot_multi_data,
+                                        fixed, logR_dec, pv_form, therm_el, pl_el)
+        draw_grids.append(g)
+
+    for k, ep in enumerate(epochs):
+        ax = ax_flat[k]
+        freq_data, flux_data = ep["freq"], ep["flux"]
+        log_flo_e, log_fhi_e = np.log10(freq_data.min()), np.log10(freq_data.max())
+        xlim = (10 ** (log_flo_e - SED_PAD_DEX), 10 ** (log_fhi_e + SED_PAD_DEX))
+        log_ylo, log_yhi = np.log10(flux_data.min()), np.log10(flux_data.max())
+        ylim = (10 ** (log_ylo - SED_PAD_DEX), 10 ** (log_yhi + SED_PAD_DEX))
+
+        ax.errorbar(freq_data, flux_data, yerr=ep["eflux"], fmt="o", ms=5,
+                    color="k", zorder=5)
+        # Blue curves = random draws from the joint posterior (same note
+        # as plot_sed_fitted_R/plot_sed_dynamical applies).
+        for g in draw_grids:
+            ax.plot(nu_grid, g[k], color="steelblue", alpha=0.15, lw=1)
+        ax.plot(nu_grid, Fnu_best_grid[k], color="crimson", lw=2,
+                label="Max Likelihood")
+
+        ax.set_xlim(xlim); ax.set_ylim(ylim)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_title(f"epoch {ep['epoch']} | T={ep['T']:.1f}d")
+        ax.set_xlabel(r"$\nu$ (Hz)"); ax.set_ylabel(r"$F_\nu$ (Jy)")
+
+    for k in range(len(epochs), len(ax_flat)):
+        ax_flat[k].set_visible(False)
+
+    fig.suptitle(title_str)
+    outpath = os.path.join(plots_dir, f"{tag}_sed_allepochs.png")
+    fig.savefig(outpath, dpi=130)
+    plt.close(fig)
+    print(f"    saved -> {outpath}")
+
+
+def run_multi_epoch(source, cfg, fixed):
+    print(f"\n=== [multi_epoch] {source} (joint, all epochs) ===")
+    multi_data = get_multi_epoch_data(source)
+    labels = cfg["free_params_multi_epoch"]
+    priors = cfg["priors_multi_epoch"]
+    logR_dec = cfg["multi_logR_dec"]
+    pv_form = cfg["multi_pv_form"]
+    args = (multi_data, fixed, cfg["therm_el"], cfg["pl_el"], priors, labels,
+             logR_dec, pv_form)
+
+    if cfg["time_only"]:
+        t_eval = time_single_eval(log_prob_multi_epoch, args, labels, priors)
+        est_total = t_eval * cfg["nwalkers"] * cfg["nsamples"]
+        print(f"    single log_prob eval ({len(multi_data['epochs'])} epochs, "
+              f"{len(multi_data['nu_unique'])} unique freqs): {t_eval*1e3:.1f} ms")
+        print(f"    est. total for nwalkers={cfg['nwalkers']}, "
+              f"nsamples={cfg['nsamples']}: {est_total/3600:.2f} hr "
+              f"(serial-equivalent; pool will help)")
+        return
+
+    tag = f"{source}_multi_epoch_joint"
+    title_str = pretty_title(source, "multi_epoch")
+    data_dir = os.path.join(cfg["outdir"], "data", cfg["run_tag"], tag)
+    plots_dir = os.path.join(cfg["outdir"], "plots", cfg["run_tag"], tag)
+    os.makedirs(plots_dir, exist_ok=True)
+
+    save_run_config_txt(plots_dir, tag, fixed, priors, cfg["therm_el"],
+                        cfg["pl_el"], free_labels=labels)
+    with open(os.path.join(plots_dir, f"{tag}_config.txt"), "a") as fh:
+        fh.write(f"\nmulti_epoch logR_dec = {logR_dec}\n")
+        fh.write(f"multi_epoch pv_form  = {pv_form}\n")
+        fh.write(f"multi_epoch n_epochs = {len(multi_data['epochs'])}\n")
+
+    sampler = run_sampler(tag, data_dir, len(labels), labels, priors,
+                           log_prob_multi_epoch, args, cfg)
+
+    flat, flat_lp, _ = save_chain_outputs(data_dir, plots_dir, tag, title_str,
+                                          sampler, labels)
+    plot_sed_multi_epoch(plots_dir, tag, title_str, multi_data, fixed, labels,
+                         logR_dec, pv_form, flat, flat_lp,
+                         cfg["therm_el"], cfg["pl_el"])
+
+
 # =====================================================================
 # REPLOT (regenerate plots from an ALREADY-SAVED chain, no resampling)
 # =====================================================================
@@ -2251,7 +2491,7 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--source", default=None, choices=["wpp", "dbl"])
-    p.add_argument("--mode", default=None, choices=["fitted_R", "dynamical"])
+    p.add_argument("--mode", default=None, choices=["fitted_R", "dynamical", "multi_epoch"])
     p.add_argument("--epoch", default=None,
                    help="1-indexed epoch, or 'all' (fitted_R mode only)")
     p.add_argument("--nwalkers", type=int, default=None)
@@ -2344,6 +2584,17 @@ def parse_args():
                    metavar=("LO", "HI"),
                    help="override the log10eps_ratio (=eps_e/eps_T) prior "
                         "bounds (only used if log10eps_ratio is in --free_params)")
+
+    # multi_epoch mode settings
+    p.add_argument("--free_params_multi", default=None,
+                   help="comma-separated free-param list for multi_epoch "
+                        "mode, e.g. 'a,log10n0,pv_ref,alpha'")
+    p.add_argument("--multi_logR_dec", type=float, default=None,
+                   help="reference radius log10(cm) for multi_epoch mode; "
+                        "pass 'inf' to auto-derive it from pv_ref/alpha/the "
+                        "earliest epoch (default)")
+    p.add_argument("--multi_pv_form", default=None, choices=["pl", "decel"],
+                   help="deceleration functional form for multi_epoch mode")
     return p.parse_args()
 
 
@@ -2369,6 +2620,10 @@ def build_config():
         priors_fitted_R["log10eps_B"] = tuple(cli.log10eps_B_bounds)
     if cli.log10eps_ratio_bounds is not None:
         priors_fitted_R["log10eps_ratio"] = tuple(cli.log10eps_ratio_bounds)
+
+    free_params_multi_epoch = (cli.free_params_multi.split(",") if cli.free_params_multi
+                                else list(FREE_PARAMS_MULTI_EPOCH))
+    priors_multi_epoch = dict(PRIORS_MULTI_EPOCH)
 
     cfg = dict(
         mode        = _resolve(cli.mode, MODE),
@@ -2407,6 +2662,10 @@ def build_config():
         fixed                 = fixed,
         free_params_fitted_R  = free_params_fitted_R,
         priors_fitted_R       = priors_fitted_R,
+        free_params_multi_epoch = free_params_multi_epoch,
+        priors_multi_epoch      = priors_multi_epoch,
+        multi_logR_dec = _resolve(cli.multi_logR_dec, MULTI_EPOCH_LOGR_DEC),
+        multi_pv_form  = _resolve(cli.multi_pv_form, MULTI_EPOCH_PV_FORM),
     )
     return cfg
 
@@ -2466,6 +2725,9 @@ def main():
 
     elif cfg["mode"] == "dynamical":
         run_dynamical(cfg["source"], cfg, fixed)
+
+    elif cfg["mode"] == "multi_epoch":
+        run_multi_epoch(cfg["source"], cfg, fixed)
 
     else:
         raise ValueError(f"Unknown mode '{cfg['mode']}'")

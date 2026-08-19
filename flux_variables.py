@@ -1794,7 +1794,7 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
     D_val = D(x,y,T,n0,R_l,X_perp,t_test, R_test,bG_sh0,k,alpha,z,R0,GRB_convention=False)
     # D_val = gamma
     
-    print(f)
+    # print(f)
 
 #Definition of B1 and B0 in terms of s and a
     if a==3: B0 = B_hom*np.sqrt((1-1/s**2)/(2*np.log(s)))
@@ -1820,7 +1820,7 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
     P_vals = P(B_vals,B_hom,s,a)
 
     #Checks that B_res is high enough: the final two printouts should always be 1 (these are simply the normalizations of the prob. distribution)
-    print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
+    # print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
           
     nu_theta_vals = 3.0*Theta**2*C.q*B_vals/(4*np.pi*C.me*C.c)
 
@@ -1831,18 +1831,19 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==False:
+        if therm_el==True and pl_el==True:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                    + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                    + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+        elif therm_el==True and pl_el==False:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-
-        if therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        elif therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
         else:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                    + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                    + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma**2
@@ -2046,18 +2047,19 @@ def LOS_IHG_MULTI_EPOCH(nu,logR_dec,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e
     #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
                 phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-                if therm_el==True and pl_el==False:
+                if therm_el==True and pl_el==True:
+                    j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                            + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+                    alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                            + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+                elif therm_el==True and pl_el==False:
                     j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
                     alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-
-                if therm_el==False and pl_el==True:
-                    j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-                    alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+                elif therm_el==False and pl_el==True:
+                    j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+                    alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
                 else:
-                    j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                            + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-                    alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                            + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+                    raise ValueError("At least one of therm_el, pl_el must be True")
         
         #Calculates luminosity averaged over magnetic field distribution
                 tau = alp*D_val*deltaR/gamma_f**2
@@ -2181,7 +2183,7 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
     P_vals = P(B_vals,B_hom,s,a)
 
     #Checks that B_res is high enough: the final two printouts should always be 1 (these are simply the normalizations of the prob. distribution)
-    print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
+    # print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
           
     nu_theta_vals = 3.0*Theta**2*C.q*B_vals/(4*np.pi*C.me*C.c)
     L_avg = np.zeros_like(nu)
@@ -2191,18 +2193,19 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==False:
+        if therm_el==True and pl_el==True:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                    + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                    + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+        elif therm_el==True and pl_el==False:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-
-        if therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        elif therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)
         else:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                    + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
-                    + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma_f**2
