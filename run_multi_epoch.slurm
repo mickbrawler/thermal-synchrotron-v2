@@ -15,10 +15,11 @@
 SOURCES=(wpp dbl)
 SOURCE=${SOURCES[$((SLURM_ARRAY_TASK_ID - 1))]}
 
-NWALKERS=24
-NSAMPLES=1e5
+NWALKERS=36
+NSAMPLES=1e6
 NCORES=$SLURM_CPUS_PER_TASK
-RUNTAG="run_multiep1"
+RUNTAG="run_multiep2"   # bumped from run_multiep1 -- different nwalkers,
+                         # nsamples, and wpp's epoch set, not a continuation
 RESUME="--resume"
 
 # ---- defaults: free params = a, log10n0, pv_ref, alpha; logR_dec=inf

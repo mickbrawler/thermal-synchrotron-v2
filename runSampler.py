@@ -197,6 +197,15 @@ MULTI_EPOCH_LOGR_DEC = float("inf")
 # as the more general choice. Override via --multi_pv_form.
 MULTI_EPOCH_PV_FORM = "decel"
 
+# Which epochs to include per source in the joint multi_epoch fit. A
+# source not listed here uses ALL its epochs (the default). Override for
+# a single run via --multi_epoch_include (applies to whichever --source
+# you're running, e.g. "1,2,3,4").
+MULTI_EPOCH_INCLUDE = {
+    "wpp": [1, 2, 3, 4],   # epochs 5-6 excluded -- not good candidates
+                            # for the joint fit (see run history)
+}
+
 # --- data handling ---
 SNR_THRESHOLD       = 3.0
 FLUX_ERR_FLOOR_FRAC = 0.10    # 10% error floor
@@ -987,20 +996,32 @@ def log_prob_dynamical(theta, epochs, fixed, therm_el, pl_el, bounds):
 # epoch when logR_dec=inf) and must be shared consistently across every
 # other epoch's R(t) solve within that same likelihood evaluation.
 
-def get_multi_epoch_data(source):
-    """Gathers ALL epochs of a source for joint multi_epoch fitting, sorted
+def get_multi_epoch_data(source, include_epochs=None):
+    """Gathers epochs of a source for joint multi_epoch fitting, sorted
     by T ascending -- index 0 is the EARLIEST epoch (the reference epoch
     when logR_dec=inf). Builds a shared, deduplicated frequency array
     (nu_unique) across every epoch's own observed frequencies, plus an
     index mapping from each epoch's own freq array into nu_unique (exact
-    match, since nu_unique is built directly from the real data)."""
+    match, since nu_unique is built directly from the real data).
+
+    include_epochs: optional list of epoch numbers (1-indexed, matching
+    EPOCH_GROUPS) to restrict the joint fit to. None (default) uses every
+    epoch that has data."""
     all_epochs = get_all_epochs(source)
+    if include_epochs is not None:
+        include_set = set(include_epochs)
+        all_epochs = [ep for ep in all_epochs if ep["epoch"] in include_set]
+        missing = include_set - {ep["epoch"] for ep in all_epochs}
+        if missing:
+            print(f"    WARNING: requested epoch(s) {sorted(missing)} for "
+                  f"'{source}' not found among its available epochs -- skipped.")
     # drop any epoch with zero data (or a NaN T, e.g. from a fully-excluded
     # non-detection epoch) -- can't contribute to a joint fit and would
     # corrupt the R_ref/reference-epoch logic if included
     epochs = [ep for ep in all_epochs if len(ep["freq"]) > 0 and np.isfinite(ep["T"])]
     if not epochs:
-        raise ValueError(f"No epochs with usable data found for source '{source}'")
+        raise ValueError(f"No epochs with usable data found for source '{source}' "
+                         f"(include_epochs={include_epochs})")
     epochs = sorted(epochs, key=lambda ep: ep["T"])
 
     T_array = np.array([ep["T"] for ep in epochs])
@@ -2330,8 +2351,10 @@ def plot_sed_multi_epoch(plots_dir, tag, title_str, multi_data, fixed, labels,
 
 
 def run_multi_epoch(source, cfg, fixed):
-    print(f"\n=== [multi_epoch] {source} (joint, all epochs) ===")
-    multi_data = get_multi_epoch_data(source)
+    include_epochs = cfg["multi_epoch_include"]
+    print(f"\n=== [multi_epoch] {source} (joint"
+          f"{f', epochs {include_epochs}' if include_epochs else ', all epochs'}) ===")
+    multi_data = get_multi_epoch_data(source, include_epochs=include_epochs)
     labels = cfg["free_params_multi_epoch"]
     priors = cfg["priors_multi_epoch"]
     logR_dec = cfg["multi_logR_dec"]
@@ -2361,6 +2384,7 @@ def run_multi_epoch(source, cfg, fixed):
         fh.write(f"\nmulti_epoch logR_dec = {logR_dec}\n")
         fh.write(f"multi_epoch pv_form  = {pv_form}\n")
         fh.write(f"multi_epoch n_epochs = {len(multi_data['epochs'])}\n")
+        fh.write(f"multi_epoch epochs used = {[ep['epoch'] for ep in multi_data['epochs']]}\n")
 
     sampler = run_sampler(tag, data_dir, len(labels), labels, priors,
                            log_prob_multi_epoch, args, cfg)
@@ -2595,6 +2619,10 @@ def parse_args():
                         "earliest epoch (default)")
     p.add_argument("--multi_pv_form", default=None, choices=["pl", "decel"],
                    help="deceleration functional form for multi_epoch mode")
+    p.add_argument("--multi_epoch_include", default=None,
+                   help="comma-separated epoch numbers to restrict the "
+                        "multi_epoch joint fit to for --source, e.g. "
+                        "'1,2,3,4'; overrides MULTI_EPOCH_INCLUDE")
     return p.parse_args()
 
 
@@ -2625,9 +2653,15 @@ def build_config():
                                 else list(FREE_PARAMS_MULTI_EPOCH))
     priors_multi_epoch = dict(PRIORS_MULTI_EPOCH)
 
+    _resolved_source = _resolve(cli.source, SOURCE)
+    if cli.multi_epoch_include is not None:
+        multi_epoch_include = [int(x) for x in cli.multi_epoch_include.split(",")]
+    else:
+        multi_epoch_include = MULTI_EPOCH_INCLUDE.get(_resolved_source)  # None = all epochs
+
     cfg = dict(
         mode        = _resolve(cli.mode, MODE),
-        source      = _resolve(cli.source, SOURCE),
+        source      = _resolved_source,
         epoch       = _resolve(cli.epoch, EPOCH),
         nwalkers    = _resolve(cli.nwalkers, NWALKERS),
         nsamples    = int(_resolve(cli.nsamples, NSAMPLES)),
@@ -2666,6 +2700,7 @@ def build_config():
         priors_multi_epoch      = priors_multi_epoch,
         multi_logR_dec = _resolve(cli.multi_logR_dec, MULTI_EPOCH_LOGR_DEC),
         multi_pv_form  = _resolve(cli.multi_pv_form, MULTI_EPOCH_PV_FORM),
+        multi_epoch_include = multi_epoch_include,
     )
     return cfg
 
