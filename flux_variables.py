@@ -359,6 +359,82 @@ def gamma_fluid(y,xi,t,t_test, R_test, bG_sh0,k,alpha,z,R0,R_l,X_perp,T,n0,GRB_c
         bG = 0.5*( bG_sh(t,t_test, R_test, bG_sh0,alpha,R0)**2 - 2.0 + ( bG_sh(t,t_test, R_test, bG_sh0,alpha,R0)**4 + 5.0*bG_sh(t,t_test, R_test, bG_sh0,alpha,R0)**2 + 4.0 )**0.5 )**0.5
     return ( 1.0 + bG**2 )**0.5
 
+def E52(t,T,R_l,k,R0,t_test,R_test,bG_sh0,n0,alpha,z):
+    '''Explosion energy for the Blandford-McKee solution in units of 10^52 erg; see Eq. A15 in Granot and Sari (2002). In our formulation, R_l is calculated in the Shell module and E52 is derived from that value of R_l
+    
+    Parameters
+    __________
+    t : float
+        Emission (retarded) time t (days)
+    T : float
+        Time (days) of observation in observer's frame (time since explosion)
+    R_l: float
+        Maximum horizontal physical distance along LOS (cm)
+    k : float
+        Power-law index for stratified density (Eq. 12 in FM25)   
+    R0 : float
+        Radius (cm) at which the maximum perpendicular extent of the shock is reached; see Figure 1 in FM25
+    t_test : array
+        Set of sample times (days) used to interpolate the shock radius as a function of time
+    R_test : array
+        Set of sample radii (cm) used to interpolate the shock radius as a function of time
+    bG_sh0: float
+        Shock proper velocity at R=R0 (the radius at which the maximum perpendicular extent of the shock is reached; see Figure 1 in FM25)
+    n0 : float
+        Nominal value for upstream number density (cm^-3)
+    alpha : float
+        Power-law index for deceleration (Eq. 11 in FM25)
+    z : float
+        source redshift
+        
+    Returns
+    _______
+    E52 : float
+        Explosion energy in Blandford-McKee solution
+    '''    
+    A = C.mp*n0*(R0**k)
+    return ((R_l**(4-k))*4*np.pi*A*C.c/((17-4*k)*(4-k)*T*86400))/1e52
+        
+
+                     
+def gamma_l(t,T,R_l,k,R0,t_test,R_test,bG_sh0,n0,alpha,z):
+    '''Immediate post-shock fluid Lorentz factor for the Blandford-McKee solution; see Eq. A15 in Granot and Sari (2002)
+    
+    Parameters
+    __________
+    t : float
+        Emission (retarded) time t (days)
+    T : float
+        Time (days) of observation in observer's frame (time since explosion)
+    R_l: float
+        Maximum horizontal physical distance along LOS (cm)
+    k : float
+        Power-law index for stratified density (Eq. 12 in FM25)   
+    R0 : float
+        Radius (cm) at which the maximum perpendicular extent of the shock is reached; see Figure 1 in FM25
+    t_test : array
+        Set of sample times (days) used to interpolate the shock radius as a function of time
+    R_test : array
+        Set of sample radii (cm) used to interpolate the shock radius as a function of time
+    bG_sh0: float
+        Shock proper velocity at R=R0 (the radius at which the maximum perpendicular extent of the shock is reached; see Figure 1 in FM25)
+    n0 : float
+        Nominal value for upstream number density (cm^-3)
+    alpha : float
+        Power-law index for deceleration (Eq. 11 in FM25)
+    z : float
+        source redshift
+        
+    Returns
+    _______
+    gamma_l : float
+        Blandford-McKee post-shock fluid Lorentz factor
+    '''    
+    A = C.mp*n0*(R0**k)
+    E_52 = E52(t,T,R_l,k,R0,t_test,R_test,bG_sh0,n0,alpha,z)
+    num = (17-4*k)*E_52*1e52
+    den = (4**(5-k))*((4-k)**(3-k))*np.pi*A*(C.c**(5-k))*(((T*86400)**(3-k)))
+    return (num/den)**(1/(2*(4-k)))
 
 
 
@@ -1718,7 +1794,7 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
     D_val = D(x,y,T,n0,R_l,X_perp,t_test, R_test,bG_sh0,k,alpha,z,R0,GRB_convention=False)
     # D_val = gamma
     
-    #print(f)
+    print(f)
 
 #Definition of B1 and B0 in terms of s and a
     if a==3: B0 = B_hom*np.sqrt((1-1/s**2)/(2*np.log(s)))
@@ -1744,7 +1820,7 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
     P_vals = P(B_vals,B_hom,s,a)
 
     #Checks that B_res is high enough: the final two printouts should always be 1 (these are simply the normalizations of the prob. distribution)
-    #print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
+    print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
           
     nu_theta_vals = 3.0*Theta**2*C.q*B_vals/(4*np.pi*C.me*C.c)
 
@@ -1755,19 +1831,18 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==True:
+        if therm_el==True and pl_el==False:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+
+        if therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        else:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        elif therm_el==True and pl_el==False:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-        elif therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        else:
-            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma**2
@@ -1780,7 +1855,229 @@ def L_ELOS_IHG(nu,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,alpha,k,d_
 
     return L_avg
 
-def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,d_L,z,therm_el=True,pl_el=True):
+
+
+"""
+Multi-Epoch ELOS Inhomogeneity Formalism
+"""
+def radius_implicit_calc(logR, t_sec, pv_ref, R_ref, alpha, pv_form='pl'):
+    """
+    logR : float
+        log10 of the shock radius
+    t_sec : float
+        Time since the initial burst in days
+    pv_ref : float
+        Proper-velocity of the shock at the radius R(t)
+    R_ref : float 
+        Reference radius (input parameter here; calculated below)
+    alpha : float
+        Slope of deceleration, with shock velocity ~ (R/R_ref)^{-alpha} or ~ (1 + R/R_ref)^{-alpha} depending
+        on pv_form
+    pv_form : string
+        Changes how the shock velocity is calculated as a function of time. Takes two values: 'pl' and 'decel.', 
+        corresponding to a history without and with a coasting phase at constant velocity
+    """
+    R = 10**logR
+    lhs = R
+    if pv_form=='pl':
+        pv = pv_ref*(R/R_ref)**(-alpha)    
+    if pv_form=='decel':
+        pv = pv_ref*(1 + R/R_ref)**(-alpha)
+    aux_func = special.hyp2f1( -1/2, 1/(2*alpha), (2*alpha+1)/(2*alpha), -pv**-2) -1/np.sqrt(1+pv**-2)
+    rhs =  C.c*t_sec/aux_func
+    return lhs-rhs
+
+def R0(t_sec, pv_ref, R_ref, alpha, pv_form):
+    """
+    t_sec : float
+        Time since the initial burst in days
+    pv_ref : float
+        Proper-velocity of the shock at the radius R(t)
+    R_ref : float 
+        Reference radius (input parameter here; calculated below)
+    alpha : float
+        Slope of deceleration, with shock velocity ~ (R/R_ref)^{-alpha} or ~ (1 + R/R_ref)^{-alpha} depending
+        on pv_form
+    pv_form : string
+        Changes how the shock velocity is calculated as a function of time. Takes two values: 'pl' and 'decel.', 
+        corresponding to a history without and with a coasting phase at constant velocity
+    """
+    guess = np.log10(R_ref)
+    R0_implicit_wrapped = lambda logR: radius_implicit_calc(logR,t_sec, pv_ref, R_ref, alpha, pv_form )
+    return 10**(sc.optimize.root_scalar(R0_implicit_wrapped,bracket=(guess-30,guess+50)).root)
+
+
+
+def LOS_IHG_MULTI_EPOCH(nu,logR_dec,s,a,delta,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,pv_ref,k,alpha,d_L,z,pv_form,therm_el=True,pl_el=True):
+    ''' Flux calculated using an effective LOS approximation that fits for R with inhomogeneous magnetic field. No assumption is made about
+        what radius to choose in the FM25 formalism (i.e., in the other ELOS approximations above, the radius is chosen to be R=R0)
+    
+    Parameters
+    __________
+    nu : array or float
+        Frequency (Hz) of radiation in observer frame
+    s : float
+        Effective range of magnetic field values B1/B0 (dimensionless)
+    a : float
+        Index for magnetic field probability distribution; the model requires 1/2 < a < (p+3)/2 + delta
+    delta : float
+        Index for explicit relation between post-shock number density and magnetic field strength, n ~ n_hom * B^delta
+    T: float
+        Time (days) of observation in observer's frame (time since explosion)  
+    n0 : float
+        Nominal value for upstream number density (cm^-3)
+    eps_e : float
+        Fraction of local fluid energy in power-law electrons
+    eps_B : float
+        Fraction of local fluid energy in magnetic field
+    eps_T : float
+        Fraction of local fluid energy in thermal electrons
+    p : float
+        Power-law electron distribution index
+    mu_u : float
+        Mean molecular weight; nominal value 0.62
+    mu_e : float
+        Mean molecular weight per electron; nominal value 1.18
+    bG_sh0: float
+        Shock proper velocity at R=R0 (the radius at which the maximum perpendicular extent of the shock is reached; see Figure 1 in FM25)    
+    alpha : float
+        Power-law index for deceleration (Eq. 11 in FM25)       
+    k : float
+        Power-law index for stratified density (Eq. 12 in FM25)    
+    d_L : float
+        Luminosity distance (cm)
+    z : float
+        Source redshift
+    therm_el : boolean
+        If True---calculates thermal electron synchrotron flux
+    pl_el : boolean
+        If True---calculates power-law electron synchrotron flux 
+    Returns
+    _______
+    L_avg : array
+        Array of emergent B-averaged luminosities  (erg s^-1 Hz^-1)
+    '''   
+    T = T/(1+z)
+    t_sec = T*86400
+    c_days = C.c*86400
+
+    nu = nu*(1+z)
+
+    #choose local values at R=R0, using the volume-filling factor given in Eq. C30 of MQ25
+    y = 1.0     #True LOS approximation
+    xi_val = 1.0
+
+    #Definition of reference time T_ref
+    t_ref_sec = t_sec[0]
+
+    #Definition of radiius array using Eq. B20 in FM26 for R0 (adjusted for the deceleration-radius formalism)
+    if logR_dec == np.inf:
+        hyp2f1_term = special.hyp2f1(-1/2, 1/(2*alpha), (2*alpha+1)/(2*alpha),-pv_ref**(-2))
+        R_ref = C.c*t_ref_sec/(hyp2f1_term - (1 + pv_ref**(-2))**(-0.5))
+        
+        R = np.zeros_like(t_sec)
+        for i in range(len(t_sec)):
+            R[i] = R0(t_sec[i], pv_ref, R_ref, alpha, pv_form)
+    else:
+        R_ref = 10**logR_dec
+        
+        R = np.zeros_like(t_sec)
+        for i in range(len(t_sec)):
+            R[i] = R0(t_sec[i], pv_ref, R_ref, alpha, pv_form)
+
+    if pv_form=='pl':
+        BG = pv_ref * (R/R_ref)**(-alpha)
+    if pv_form=='decel':
+        BG = pv_ref * (1 + R/R_ref)**(-alpha) 
+        
+    L_avg = np.zeros((np.size(R),np.size(nu)))
+
+    for l in range(len(R)):
+        bG_fluid = 0.5*( BG[l]**2 - 2.0 + ( BG[l]**4 + 5.0*BG[l]**2 + 4.0 )**0.5 )**0.5
+        gamma_f =  ( 1.0 + bG_fluid**2 )**0.5
+        beta_f = bG_fluid/np.sqrt(1+bG_fluid**2)
+
+        xi_shell = (1 - 3/((3-k)*4*gamma_f**2))**(1/3)
+        f = 1-xi_shell**3
+        deltaR = 4*f*R[l]/(3)
+        n_hom = 4*mu_e*gamma_f*n0      #Assuming n_ext = n0
+        u_val = (gamma_f - 1)*n_hom*mu_u*C.mp*C.c*C.c/mu_e
+
+        B_hom = np.sqrt(8*np.pi*eps_B*u_val)
+        
+        zeta = eps_T*u_val/(n_hom*C.me*C.c*C.c)
+        Theta =  (5*zeta - 6 + np.sqrt((6-5*zeta)**2 + 240*zeta))/30  
+        
+        mu_perp = BG[l]/np.sqrt(1 + BG[l]**2)
+        D_val = gamma_f    #Simple assumption for Doppler factor
+        D_val = 1/(gamma_f*(1-mu_perp*beta_f))    #R0 assumption for Doppler factor
+
+
+    #Definition of B1 and B0 in terms of s and a
+        if a==3: 
+            B0 = B_hom*np.sqrt((1-1/s**2)/(2*np.log(s)))
+        elif a==1: 
+            B0 = B_hom*np.sqrt(2*np.log(s)/(s**2 - 1))
+        else: 
+            B0 = B_hom*np.sqrt((3-a)*(s**(1-a)-1)/((1-a)*(s**(3-a)-1)))
+        B1 = s*B0
+
+    #Arrays to be averaged over
+        B_res = 100    #Number of B-fields to integrate over
+        B_vals = np.logspace(np.log10(B0),np.log10(B1),B_res)
+
+    #Definition of C_prime, the normalization factor for the number density delta parameterization
+        if a==1: A = 1/np.log(s)
+        else:    A = (1-a)/(B1**(1-a) - B0**(1-a))
+
+        if a==delta+1: C_prime = 1/(A*np.log(s))
+        else:          C_prime = (delta-a+1)/(A*(B0**(delta-a+1))*(s**(delta-a+1)-1))
+        
+        n_vals = n_hom*C_prime*(B_vals)**delta
+        P_vals = P(B_vals,B_hom,s,a)
+
+        #Checks that B_res is high enough: the final two printouts should always be 1 (these are simply the normalizations of the prob. distribution)
+        # print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
+            
+        nu_theta_vals = 3.0*Theta**2*C.q*B_vals/(4*np.pi*C.me*C.c)
+        
+        for i in range(len(nu)):
+
+    #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
+                phi_vals = nu[i]/(D_val*nu_theta_vals)
+
+                if therm_el==True and pl_el==False:
+                    j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+                    alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+
+                if therm_el==False and pl_el==True:
+                    j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+                    alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+                else:
+                    j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                            + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+                    alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
+                            + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        
+        #Calculates luminosity averaged over magnetic field distribution
+                tau = alp*D_val*deltaR/gamma_f**2
+                L_vals = 4*np.pi**2*(R[l]**2)*((D_val**3)/gamma_f**2)*(j/alp)*(1-np.exp(-tau))
+                if np.size(tau)==1:
+                    if tau<1e-2:    L_vals = 4*np.pi**2*R[l]**2*deltaR*(D_val/gamma_f)**4*j
+                else:
+                                    L_vals[tau<=1e-2] =  4*np.pi**2*R[l]**2*deltaR*(D_val/gamma_f)**4*j[tau<=1e-2]
+                L_avg[l,i] = integrate.simpson(P_vals*L_vals,B_vals)
+
+    return L_avg, BG
+
+
+
+
+
+
+
+
+def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,alpha,d_L,z,therm_el=True,pl_el=True):
     ''' Flux calculated using an effective LOS approximation that fits for R with inhomogeneous magnetic field. No assumption is made about what radius to choose in the FM25 formalism (i.e., in the other ELOS approximations above, the radius is chosen to be R=R0)
     
     Parameters
@@ -1860,8 +2157,7 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
     
     D_val = gamma_f    #Simple assumption for Doppler factor
     D_val = 1/(gamma_f*(1-beta_f))    #LOS assumption for Doppler factor
-
-#    print(f)
+#FIX DOPPLER FACTOR
 
 #Definition of B1 and B0 in terms of s and a
     if a==3: B0 = B_hom*np.sqrt((1-1/s**2)/(2*np.log(s)))
@@ -1885,7 +2181,7 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
     P_vals = P(B_vals,B_hom,s,a)
 
     #Checks that B_res is high enough: the final two printouts should always be 1 (these are simply the normalizations of the prob. distribution)
-    #print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
+    print(B0,B_hom,B1,C_prime,integrate.simpson(P_vals,B_vals),integrate.simpson(P_vals*B_vals**2,B_vals)/B_hom**2,integrate.simpson(P_vals*n_vals,B_vals)/(n_hom))
           
     nu_theta_vals = 3.0*Theta**2*C.q*B_vals/(4*np.pi*C.me*C.c)
     L_avg = np.zeros_like(nu)
@@ -1895,19 +2191,18 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
 #Emission and absorption coefficients for three distributions: thermal electrons only, power-law electrons only, and a hybrid model
         phi_vals = nu[i]/(D_val*nu_theta_vals)
 
-        if therm_el==True and pl_el==True:
+        if therm_el==True and pl_el==False:
+            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
+
+        if therm_el==False and pl_el==True:
+            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
+            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
+        else:
             j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
             alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf) \
                     + MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        elif therm_el==True and pl_el==False:
-            j = MQ24.jnu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-            alp = MQ24.alphanu_th(phi_vals,n_vals,B_vals,Theta,z_cool=np.inf)
-        elif therm_el==False and pl_el==True:
-            j = MQ24.jnu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf)    
-            alp = MQ24.alphanu_pl(phi_vals,n_vals,u_val,B_vals,Theta,eps_e,eps_e/eps_T,p=p,z_cool=np.inf) 
-        else:
-            raise ValueError("At least one of therm_el, pl_el must be True")
 
 #Calculates luminosity averaged over magnetic field distribution
         tau = alp*D_val*deltaR/gamma_f**2
@@ -1919,6 +2214,9 @@ def LOS_IHG_Fitted_R(nu,s,a,delta,R,T,n0,eps_e,eps_B,eps_T,p,mu_u,mu_e,bG_sh0,k,
         L_avg[i] = integrate.simpson(P_vals*L_vals,B_vals)
 
     return L_avg
+
+
+
 
 
 

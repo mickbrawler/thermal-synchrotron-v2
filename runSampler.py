@@ -145,6 +145,11 @@ PRIORS_FITTED_R = dict(
     # eps_e+eps_B+eps_T<=1 physicality cut (checked dynamically per-sample)
     # will additionally carve out any unphysical corner within this range.
     log10eps_B = (-3.0, -0.301),
+    # eps_ratio = eps_e/eps_T sampled directly (see _build_theta_params) --
+    # with eps_T=0.4 fixed, this range corresponds to eps_e roughly in
+    # (0.0004, 0.5). Adjust via --log10eps_ratio_bounds if you want a
+    # different range.
+    log10eps_ratio = (-3.0, 0.1),
 )
 # dynamical mode fits: a, BG0, alpha, log10n0 (shared across all epochs)
 # NOTE: alpha bounds are a rough placeholder -- tune these.
@@ -432,6 +437,10 @@ def save_run_config_txt(plots_dir, tag, fixed, priors, therm_el, pl_el,
     if free_labels:
         free_keys = {(lab[5:] if lab.startswith("log10") else lab)
                      for lab in free_labels}
+        if "eps_ratio" in free_keys:
+            # eps_e is DERIVED from the free eps_ratio (=eps_e/eps_T) and
+            # eps_T, not actually fixed -- don't list it as such below.
+            free_keys.add("eps_e")
 
     lines = [f"Configuration for {tag}", "=" * (len(tag) + 15), "",
              "Fixed (non-fit) parameters:"]
@@ -786,7 +795,8 @@ def check_physicality(fixed, free_labels=()):
     dynamically per-sample in log_prob instead -- skip them here rather
     than judging by whatever placeholder value sits in FIXED_PARAMS."""
     free_keys = {(lab[5:] if lab.startswith("log10") else lab) for lab in free_labels}
-    eps_e = 0.0 if "eps_e" in free_keys else fixed["eps_e"]
+    eps_e_free = "eps_e" in free_keys or "eps_ratio" in free_keys
+    eps_e = 0.0 if eps_e_free else fixed["eps_e"]
     eps_B = 0.0 if "eps_B" in free_keys else fixed["eps_B"]
     eps_T = 0.0 if "eps_T" in free_keys else fixed["eps_T"]
     total = eps_e + eps_B + eps_T
@@ -809,13 +819,23 @@ def _build_theta_params(theta, labels, fixed):
     """Merge FIXED_PARAMS with the free parameters from theta into one
     physical-parameter dict. A label prefixed with 'log10' is converted to
     its linear value under that key (e.g. 'log10eps_B' -> params['eps_B']
-    = 10**theta_value), overriding whatever FIXED_PARAMS had for it."""
+    = 10**theta_value), overriding whatever FIXED_PARAMS had for it.
+
+    Special case: 'log10eps_ratio' is the RATIO eps_e/eps_T sampled
+    directly as one parameter (not eps_e itself) -- this is the actual
+    quantity that enters the flux calculation as the PL amplitude scaling
+    when GRB_convention=False (which is always the case in this pipeline).
+    If present, eps_e is DERIVED from it and whatever eps_T currently is
+    (fixed or itself free), overriding any eps_e that FIXED_PARAMS had.
+    """
     params = dict(fixed)
     for lab, val in zip(labels, theta):
         if lab.startswith("log10"):
             params[lab[5:]] = 10.0 ** val
         else:
             params[lab] = val
+    if "eps_ratio" in params:
+        params["eps_e"] = params["eps_ratio"] * params["eps_T"]
     return params
 
 
@@ -2320,6 +2340,10 @@ def parse_args():
                    metavar=("LO", "HI"),
                    help="override the log10eps_B prior bounds (only used "
                         "if log10eps_B is in --free_params)")
+    p.add_argument("--log10eps_ratio_bounds", type=float, nargs=2, default=None,
+                   metavar=("LO", "HI"),
+                   help="override the log10eps_ratio (=eps_e/eps_T) prior "
+                        "bounds (only used if log10eps_ratio is in --free_params)")
     return p.parse_args()
 
 
@@ -2343,6 +2367,8 @@ def build_config():
     priors_fitted_R = dict(PRIORS_FITTED_R)
     if cli.log10eps_B_bounds is not None:
         priors_fitted_R["log10eps_B"] = tuple(cli.log10eps_B_bounds)
+    if cli.log10eps_ratio_bounds is not None:
+        priors_fitted_R["log10eps_ratio"] = tuple(cli.log10eps_ratio_bounds)
 
     cfg = dict(
         mode        = _resolve(cli.mode, MODE),
